@@ -6,16 +6,15 @@ from spotipy.oauth2 import SpotifyClientCredentials
 # --- 1. KONFIGURÁCIÓ & TV STÍLUS (CSS) ---
 st.set_page_config(page_title="Hitster TV Party", page_icon="📺", layout="wide")
 
-# Itt varázsoljuk át a kinézetet
 st.markdown("""
 <style>
-    /* Háttér és alap színek - Sötét téma a TV miatt */
+    /* Háttér és alap színek - Sötét téma */
     .stApp {
         background: linear-gradient(135deg, #1e1e2e 0%, #2d2b55 100%);
         color: white;
     }
     
-    /* Eredményjelző kártyák a tetején */
+    /* Eredményjelző kártyák */
     .score-card {
         background-color: rgba(255, 255, 255, 0.1);
         border-radius: 15px;
@@ -25,7 +24,7 @@ st.markdown("""
         transition: transform 0.2s;
     }
     .score-active {
-        border: 3px solid #00d4ff; /* Kiemelés, ha ő jön */
+        border: 3px solid #00d4ff;
         background-color: rgba(0, 212, 255, 0.15);
         transform: scale(1.05);
         box-shadow: 0 0 15px #00d4ff;
@@ -37,9 +36,12 @@ st.markdown("""
         margin: 0;
     }
     .score-name {
-        font-size: 1.2em;
+        font-size: 1.1em;
         font-weight: 600;
         margin: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
 
     /* Idővonal kártyák */
@@ -64,7 +66,7 @@ st.markdown("""
         line-height: 1.2;
     }
     
-    /* A rejtélyes dal kártyája */
+    /* Rejtélyes dal doboz */
     .mystery-box {
         background-color: #333;
         border: 3px dashed #ff4b4b;
@@ -74,7 +76,7 @@ st.markdown("""
         margin: 20px 0;
     }
 
-    /* Gombok tuningolása */
+    /* Gombok */
     div.stButton > button {
         background-color: #ff4b4b;
         color: white;
@@ -89,7 +91,7 @@ st.markdown("""
         box-shadow: none;
         transform: translateY(4px);
     }
-    /* Kisebb gombok az idővonal közé */
+    /* Kicsi gombok */
     div[data-testid="column"] button {
         background-color: #444;
         box-shadow: none;
@@ -99,17 +101,15 @@ st.markdown("""
     div[data-testid="column"] button:hover {
         background-color: #00d4ff;
     }
-
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. SPOTIFY LOGIKA (Ugyanaz maradt) ---
+# --- 2. SPOTIFY LOGIKA ---
 def load_spotify_playlist(client_id, client_secret, playlist_url):
     try:
         auth_manager = SpotifyClientCredentials(client_id=client_id, client_secret=client_secret)
         sp = spotipy.Spotify(auth_manager=auth_manager)
         
-        # Kezeli a ?si=... és egyéb paramétereket
         pl_id = playlist_url.split('/')[-1].split('?')[0]
         
         results = sp.playlist_items(pl_id)
@@ -123,7 +123,6 @@ def load_spotify_playlist(client_id, client_secret, playlist_url):
             track = item['track']
             if not track: continue
             
-            # Évszám
             if track['album']['release_date']:
                 year = track['album']['release_date'].split('-')[0]
                 if year.isdigit():
@@ -140,7 +139,8 @@ def load_spotify_playlist(client_id, client_secret, playlist_url):
 
 # --- 3. JÁTÉK ÁLLAPOT (STATE) ---
 if 'players' not in st.session_state:
-    st.session_state.players = ["Jorgosz", "Lilla", "Józsi"]
+    # ITT ADTUK HOZZÁ DIÁT:
+    st.session_state.players = ["Jorgosz", "Lilla", "Józsi", "Dia"]
 
 if 'game_started' not in st.session_state:
     st.session_state.game_started = False
@@ -151,7 +151,7 @@ with st.sidebar:
     st.write("Add meg a Spotify kulcsokat:")
     api_id = st.text_input("Client ID", type="password")
     api_secret = st.text_input("Client Secret", type="password")
-    pl_url = st.text_input("Playlist Link", value="https://open.spotify.com/playlist/2WQxrq5bmHMlVuzvtwwywV?si=LfJsaghwQqOweKjygM8vMA")
+    pl_url = st.text_input("Playlist Link", value="https://open.spotify.com/playlist/2WQxrq5bmHMlVuzvtwwywV?si=KGQWViY9QESfrZc21btFzA") # A javított link
     
     if st.button("🚀 BULI INDÍTÁSA", type="primary"):
         if api_id and api_secret and pl_url:
@@ -160,7 +160,7 @@ with st.sidebar:
                 if deck:
                     random.shuffle(deck)
                     st.session_state.deck = deck
-                    # Kezdő lap kiosztása
+                    # Kezdő lap kiosztása mindenkinek
                     st.session_state.timelines = {p: [st.session_state.deck.pop()] for p in st.session_state.players}
                     st.session_state.turn_index = 0
                     st.session_state.current_mystery_song = st.session_state.deck.pop()
@@ -171,10 +171,10 @@ with st.sidebar:
             st.error("Hiányzó adatok!")
             
     st.divider()
-    st.write("Játékosok módosítása (Újraindítás kell):")
-    st.session_state.players[0] = st.text_input("Játékos 1", st.session_state.players[0])
-    st.session_state.players[1] = st.text_input("Játékos 2", st.session_state.players[1])
-    st.session_state.players[2] = st.text_input("Játékos 3", st.session_state.players[2])
+    st.write("Játékosok nevei:")
+    # Ez a rész most már dinamikusan kezeli mind a 4 (vagy több) játékost
+    for i in range(len(st.session_state.players)):
+        st.session_state.players[i] = st.text_input(f"Játékos {i+1}", st.session_state.players[i])
 
 # --- 5. FŐ JÁTÉKTÉR ---
 
@@ -182,18 +182,26 @@ if not st.session_state.game_started:
     st.title("📺 TV HITSTER PARTY")
     st.markdown("### 👋 Szia! Kösd rá a gépet a TV-re!")
     st.info("Az indításhoz használd az oldalsávot a bal oldalon. (Mobilon a bal felső sarok >)")
+    st.write(f"Jelenlegi játékosok: {', '.join(st.session_state.players)}")
 
 else:
     # VÁLTOZÓK
-    current_player_idx = st.session_state.turn_index
+    # Biztosítjuk, hogy a körforgás 4 emberrel is működjön
+    current_player_idx = st.session_state.turn_index % len(st.session_state.players)
     current_player_name = st.session_state.players[current_player_idx]
     
     # --- EREDMÉNYJELZŐ (SCOREBOARD) ---
     st.markdown("<br>", unsafe_allow_html=True)
+    
+    # Automatikusan annyi oszlop, ahány játékos van (most 4)
     score_cols = st.columns(len(st.session_state.players))
     
     for idx, player in enumerate(st.session_state.players):
-        score = len(st.session_state.timelines[player]) # A pont = kártyák száma
+        # Ha véletlenül több játékos lenne a listában, mint a timeline-ban, kezeljük le
+        if player not in st.session_state.timelines:
+             st.session_state.timelines[player] = []
+             
+        score = len(st.session_state.timelines[player])
         is_active = (idx == current_player_idx)
         active_class = "score-active" if is_active else ""
         
@@ -210,11 +218,10 @@ else:
 
     # --- JÁTÉK LOGIKA ---
     def handle_guess(insert_index):
-        p_name = st.session_state.players[st.session_state.turn_index]
+        p_name = st.session_state.players[st.session_state.turn_index % len(st.session_state.players)]
         timeline = st.session_state.timelines[p_name]
         song = st.session_state.current_mystery_song
         
-        # Szabály ellenőrzés
         prev_ok = (insert_index == 0) or (timeline[insert_index-1]['year'] <= song['year'])
         next_ok = (insert_index == len(timeline)) or (timeline[insert_index]['year'] >= song['year'])
         
@@ -229,7 +236,8 @@ else:
         st.session_state.game_phase = "REVEAL"
 
     def next_turn():
-        st.session_state.turn_index = (st.session_state.turn_index + 1) % 3
+        # A % művelet biztosítja a körforgást 4 ember között is
+        st.session_state.turn_index = (st.session_state.turn_index + 1)
         if st.session_state.deck:
             st.session_state.current_mystery_song = st.session_state.deck.pop()
             st.session_state.game_phase = "GUESSING"
@@ -242,7 +250,6 @@ else:
     if st.session_state.game_phase == "GUESSING":
         st.markdown(f"<h2 style='text-align: center;'>🎧 {current_player_name}, te jössz!</h2>", unsafe_allow_html=True)
         
-        # Zenelejátszó középen
         mys_song = st.session_state.current_mystery_song
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
@@ -253,21 +260,17 @@ else:
                 <p>Mikor jelent meg?</p>
             </div>
             """, unsafe_allow_html=True)
-            # Spotify Player
             st.components.v1.iframe(f"https://open.spotify.com/embed/track/{mys_song['spotify_id']}?utm_source=generator", height=80)
 
-        # Idővonal + Gombok
         st.write("")
         st.markdown("### 👇 Válassz helyet az idővonaladon:")
         
         timeline = st.session_state.timelines[current_player_name]
-        
-        # Dinamikus oszlopok: Gomb - Kártya - Gomb - Kártya...
         t_cols = st.columns(len(timeline) * 2 + 1)
         
         for i in range(len(timeline) + 1):
             with t_cols[i*2]:
-                st.markdown("<br>", unsafe_allow_html=True) # Kis helyigazítás
+                st.markdown("<br>", unsafe_allow_html=True)
                 if st.button("IDE", key=f"btn_{i}", use_container_width=True):
                     handle_guess(i)
                     st.rerun()
@@ -283,7 +286,6 @@ else:
                     """, unsafe_allow_html=True)
 
     elif st.session_state.game_phase == "REVEAL":
-        # EREDMÉNYHIRDETÉS
         if st.session_state.success:
             st.balloons()
             st.success(st.session_state.game_msg)
@@ -297,7 +299,6 @@ else:
         
         for idx, card in enumerate(timeline):
             with d_cols[idx]:
-                # Ha ez volt a nyertes kártya, legyen arany kerete
                 style = "border: 4px solid #ffcc00; transform: scale(1.1);" if (card == st.session_state.current_mystery_song and st.session_state.success) else ""
                 
                 st.markdown(f"""
@@ -308,7 +309,6 @@ else:
                 """, unsafe_allow_html=True)
 
         st.markdown("<br><br>", unsafe_allow_html=True)
-        # Nagy gomb középen
         c1, c2, c3 = st.columns([1, 2, 1])
         with c2:
             st.button("KÖVETKEZŐ JÁTÉKOS ➡️", on_click=next_turn, use_container_width=True)
@@ -316,8 +316,6 @@ else:
     elif st.session_state.game_phase == "GAME_OVER":
         st.title("🏆 VÉGE A JÁTÉKNAK!")
         st.balloons()
-        
-        # Győztes keresése
         winner = max(st.session_state.timelines, key=lambda k: len(st.session_state.timelines[k]))
         st.markdown(f"<h1 style='text-align: center; color: gold;'>A GYŐZTES: {winner}</h1>", unsafe_allow_html=True)
         

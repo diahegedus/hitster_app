@@ -77,7 +77,7 @@ with st.sidebar:
     # type="password" elrejti a karaktereket csillagokkal
     api_id = st.text_input("Client ID", type="password")
     api_secret = st.text_input("Client Secret", type="password")
-    pl_url = st.text_input("Playlist Link", value="https://open.spotify.com/playlist/37i9dQZEVXbMDoHDwVN2tF")
+    pl_url = st.text_input("Playlist Link", value="https://open.spotify.com/playlist/2WQxrq5bmHMlVuzvtwwywV?si=KGQWViY9QESfrZc21btFzA")
     
     start_btn = st.button("🚀 Játék Indítása")
     

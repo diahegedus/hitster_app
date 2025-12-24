@@ -43,30 +43,32 @@ st.markdown("""
 # --- 3. Inicializálás (State) ---
 
 if 'players' not in st.session_state:
-    st.session_state.players = ["Játékos 1", "Játékos 2", "Játékos 3"]
-    
+    # ITT vannak az új nevek:
+    st.session_state.players = ["Jorgosz", "Lilla", "Józsi"]
+
 if 'timelines' not in st.session_state:
-    # Minden játékos kap egy kezdő kártyát véletlenszerűen
+    # Mindenki kap egy kezdő kártyát
     random.shuffle(MUSIC_DB)
     st.session_state.deck = MUSIC_DB.copy()
+    
+    # Ez a sor most már automatikusan létrehozza az idővonalat 
+    # a fenti "players" lista alapján (nem kell kézzel beírni a neveket):
     st.session_state.timelines = {
-        "Játékos 1": [st.session_state.deck.pop()],
-        "Játékos 2": [st.session_state.deck.pop()],
-        "Játékos 3": [st.session_state.deck.pop()]
+        player: [st.session_state.deck.pop()] 
+        for player in st.session_state.players
     }
 
 if 'turn_index' not in st.session_state:
     st.session_state.turn_index = 0
 
 if 'current_mystery_song' not in st.session_state:
-    # Húzunk egy dalt, amit ki kell találni
     if st.session_state.deck:
         st.session_state.current_mystery_song = st.session_state.deck.pop()
     else:
         st.session_state.current_mystery_song = None
 
 if 'game_phase' not in st.session_state:
-    st.session_state.game_phase = "GUESSING" # GUESSING vagy REVEAL
+    st.session_state.game_phase = "GUESSING"
 
 # --- 4. Logika ---
 

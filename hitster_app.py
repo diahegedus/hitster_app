@@ -57,8 +57,10 @@ def get_original_year_mb(artist, title, spotify_year):
 
 # --- 3. GEMINI KERESŐ (AI) ---
 def get_year_from_gemini(api_key, artist, title, current_year):
-    """Gemini AI megkérdezése, ha minden más csődöt mondott."""
-    if not api_key: return current_year, "Nincs kulcs"
+    """Gemini AI megkérdezése."""
+    # Ha nincs kulcs megadva, azonnal visszatérünk az eredeti évvel
+    if not api_key: 
+        return current_year, "Nincs AI Kulcs"
     
     try:
         genai.configure(api_key=api_key)
@@ -76,7 +78,6 @@ def get_year_from_gemini(api_key, artist, title, current_year):
         if text.isdigit():
             ai_year = int(text)
             if 1900 < ai_year <= 2025:
-                # Ha az AI régebbi évet mond, mint amit eddig tudtunk, hiszünk neki
                 if ai_year < current_year:
                     return ai_year, "Gemini AI"
                 else:
@@ -88,7 +89,8 @@ def get_year_from_gemini(api_key, artist, title, current_year):
         return current_year, "Gemini Hiba"
 
 # --- 4. ADATBETÖLTÉS ÉS FELDOLGOZÁS ---
-def load_and_process_playlist(spotify_id, spotify_secret, gemini_key, playlist_url):
+# Itt adjuk át a gemini_key-t paraméterként
+def load_and_process_playlist(spotify_id, spotify_secret, playlist_url, gemini_key):
     try:
         # 1. Spotify letöltés
         auth_manager = SpotifyClientCredentials(client_id=spotify_id, client_secret=spotify_secret)
@@ -139,11 +141,11 @@ def load_and_process_playlist(spotify_id, spotify_secret, gemini_key, playlist_u
             
             # B) Ha a MusicBrainz nem talált jobbat (maradt a Spotify év), ÉS van Gemini kulcs -> Kérdezzük a Geminit
             if source == "Spotify" and gemini_key:
+                # Csak akkor hívjuk meg, ha a felhasználó megadta a kulcsot
                 gemini_year, g_source = get_year_from_gemini(gemini_key, artist, title, year)
                 if gemini_year < year:
                     year = gemini_year
-                    # print(f"Javítva Geminivel: {title} -> {year}")
-                time.sleep(0.5) # Kis pihi, hogy ne terheljük túl az API-t
+                time.sleep(0.5) # Kis pihi az API kímélésére
             else:
                 year = mb_year
             
@@ -175,15 +177,17 @@ with st.sidebar:
     pl_url = st.text_input("Playlist/Album Link", value="https://open.spotify.com/playlist/2WQxrq5bmHMlVuzvtwwywV?si=KGQWViY9QESfrZc21btFzA")
     
     st.subheader("2. AI Javítás (Opcionális)")
-    st.caption("Ha megadod, a Gemini kijavítja a hibás évszámokat.")
-    gemini_key = st.text_input("Google Gemini API Key", type="password")
+    st.caption("Ha beírod a kulcsot, a Gemini kijavítja a hibás évszámokat.")
+    # ITT AZ ÚJ MEZŐ:
+    gemini_key_input = st.text_input("Google Gemini API Key", type="password")
     
     st.divider()
     
     if st.button("🚀 BULI INDÍTÁSA", type="primary"):
         if api_id and api_secret and pl_url:
             with st.spinner("Zenék letöltése és AI elemzése... (Ez eltarthat egy percig)"):
-                deck = load_and_process_playlist(api_id, api_secret, gemini_key, pl_url)
+                # Átadjuk a beírt kulcsot a függvénynek
+                deck = load_and_process_playlist(api_id, api_secret, pl_url, gemini_key_input)
                 if deck:
                     random.shuffle(deck)
                     st.session_state.deck = deck

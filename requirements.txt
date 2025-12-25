@@ -1,2 +1,4 @@
 streamlit
 spotipy
+musicbrainzngs
+google-generative-ai

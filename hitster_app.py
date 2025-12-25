@@ -2,9 +2,109 @@ import streamlit as st
 import random
 import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
-import google.generativeai as genai
 import time
+# Ellenőrizzük a csomagot
+try:
+    import google.generativeai as genai
+    HAS_AI = True
+except ImportError:
+    HAS_AI = False
 
+# --- 1. KONFIGURÁCIÓ ---
+st.set_page_config(page_title="AI DM Pult (Auto)", page_icon="🐉", layout="wide")
+
+DEFAULT_ADVENTURE = {
+    "title": "Üres Kaland",
+    "description": "Tölts be egy JSON fájlt az oldalsávban!",
+    "bestiary": {},
+    "chapters": []
+}
+
+# --- 2. ÁLLAPOTOK ---
+if 'dice_log' not in st.session_state: st.session_state.dice_log = []
+if 'chat_history' not in st.session_state: st.session_state.chat_history = []
+if 'active_adventure' not in st.session_state: st.session_state.active_adventure = DEFAULT_ADVENTURE
+if 'inventory' not in st.session_state: st.session_state.inventory = []
+if 'initiative' not in st.session_state: st.session_state.initiative = []
+
+# --- 3. AI MOTOR (AUTO-DETECT & HIBAKEZELÉS) ---
+def query_ai_auto(prompt, api_key):
+    if not api_key:
+        return "⚠️ Nincs API kulcs! Állítsd be a Secrets-ben vagy írd be oldalt!"
+
+    try:
+        genai.configure(api_key=api_key)
+
+        # --- 1) MODELLEK LISTÁZÁSA ---
+        try:
+            raw_models = genai.list_models()
+        except Exception as e:
+            return f"⛔ Modellek listázása sikertelen: {str(e)}"
+
+        valid_models = []
+        for m in raw_models:
+            methods = getattr(m, "supported_generation_methods", [])
+            if isinstance(methods, dict):
+                methods = list(methods.keys())
+
+            if "generateContent" in methods:
+                valid_models.append(m.name)
+
+        if not valid_models:
+            return "⛔ Nem találtam egyetlen olyan modellt sem, amely támogatná a generateContent metódust."
+
+        # --- 2) PREFERÁLT MODELLEK ---
+        preferred_order = [
+            "gemini-1.5-flash-latest",
+            "gemini-1.5-flash",
+            "gemini-1.5-pro-latest",
+            "gemini-1.5-pro",
+            "models/gemini-1.5-flash",
+            "models/gemini-1.5-pro",
+        ]
+
+        chosen_model = None
+        for pref in preferred_order:
+            if pref in valid_models or f"models/{pref}" in valid_models:
+                chosen_model = pref
+                if f"models/{pref}" in valid_models:
+                    chosen_model = f"models/{pref}"
+                break
+
+        if not chosen_model:
+            chosen_model = valid_models[0]
+
+        # --- 3) KONTEKSTUS ---
+        adv_context = json.dumps(st.session_state.active_adventure, ensure_ascii=False)
+        inv_context = ", ".join(st.session_state.inventory)
+
+        system_prompt = f"""
+        Te egy Dungeon Master Segéd vagy.
+        Források:
+        1. KALAND: {adv_context}
+        2. INVENTORY: {inv_context}
+        """
+
+        # --- 4) MODEL INICIALIZÁLÁS ---
+        try:
+            model = genai.GenerativeModel(chosen_model)
+        except Exception as e:
+            return f"⛔ A modell inicializálása sikertelen ({chosen_model}): {str(e)}"
+
+        # --- 5) KÉRÉS ---
+        try:
+            response = model.generate_content(f"{system_prompt}\n\nKÉRDÉS: {prompt}")
+            return f"✅ **[{chosen_model}]** válasza:\n\n{response.text}"
+        except Exception as e:
+            err = str(e)
+            if "429" in err or "quota" in err.lower():
+                return "⛔ **Quota túllépve!**\nVárj néhány percet vagy hozz létre új kulcsot."
+            if "404" in err or "not found" in err.lower():
+                return f"⛔ **A választott modell nem érhető el:** {chosen_model}"
+            return f"Hiba a generálás során: {str(e)}"
+
+    except Exception as e:
+        return f"Váratlan hiba: {str(e)}"
 # --- 1. KONFIGURÁCIÓ & STÍLUS ---
 st.set_page_config(page_title="Hitster TV Party", page_icon="📺", layout="wide")
 

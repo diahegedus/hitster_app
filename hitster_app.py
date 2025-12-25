@@ -2,7 +2,6 @@ import streamlit as st
 import random
 import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
-import musicbrainzngs
 import google.generativeai as genai
 import time
 
@@ -27,45 +26,16 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. MUSICBRAINZ KERESŐ ---
-def get_original_year_mb(artist, title, spotify_year):
-    """MusicBrainz keresés."""
-    musicbrainzngs.set_useragent("HitsterPartyApp", "1.0", "contact@example.com")
-    try:
-        result = musicbrainzngs.search_recordings(artist=artist, recording=title, limit=5)
-        candidates = []
-        if 'recording-list' in result:
-            for recording in result['recording-list']:
-                if 'release-list' in recording:
-                    for release in recording['release-list']:
-                        if 'date' in release:
-                            date_str = release['date']
-                            try:
-                                year = int(date_str.split('-')[0])
-                                if 1900 < year <= 2025:
-                                    candidates.append(year)
-                            except: continue
-        
-        if candidates:
-            mb_year = min(candidates)
-            if mb_year < spotify_year:
-                return mb_year, "MusicBrainz"
-            
-        return spotify_year, "Spotify"
-    except:
-        return spotify_year, "Spotify"
-
-# --- 3. GEMINI KERESŐ (AI) ---
+# --- 2. GEMINI AI LOGIKA ---
 def get_year_from_gemini(api_key, artist, title, current_year):
-    """Gemini AI megkérdezése."""
-    # Ha nincs kulcs megadva, azonnal visszatérünk az eredeti évvel
-    if not api_key: 
-        return current_year, "Nincs AI Kulcs"
+    """Megkérdezi a Geminit, hogy mi az eredeti évszám."""
+    if not api_key: return current_year
     
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-pro')
         
+        # A prompt utasítja az AI-t, hogy csak évet adjon vissza
         prompt = f"""
         What is the ORIGINAL release year of the song "{title}" by "{artist}"?
         Ignore remasters, compilations, or re-releases. I need the year when the song was FIRST released to the public.
@@ -77,29 +47,30 @@ def get_year_from_gemini(api_key, artist, title, current_year):
         
         if text.isdigit():
             ai_year = int(text)
+            # Ha az AI érvényes évet mond (1900-2025 között)
             if 1900 < ai_year <= 2025:
+                # Csak akkor írjuk felül, ha az AI szerint régebbi a dal (tehát a Spotify remastert talált)
                 if ai_year < current_year:
-                    return ai_year, "Gemini AI"
+                    return ai_year
                 else:
-                    return current_year, "Gemini (nem volt régebbi)"
+                    return current_year # Marad az eredeti, ha az AI szerint is ugyanaz
         
-        return current_year, "Gemini (hiba)"
+        return current_year
     except Exception as e:
         print(f"Gemini hiba: {e}")
-        return current_year, "Gemini Hiba"
+        return current_year
 
-# --- 4. ADATBETÖLTÉS ÉS FELDOLGOZÁS ---
-# Itt adjuk át a gemini_key-t paraméterként
+# --- 3. ADATBETÖLTÉS ---
 def load_and_process_playlist(spotify_id, spotify_secret, playlist_url, gemini_key):
     try:
-        # 1. Spotify letöltés
+        # Spotify Auth
         auth_manager = SpotifyClientCredentials(client_id=spotify_id, client_secret=spotify_secret)
         sp = spotipy.Spotify(auth_manager=auth_manager)
         
         clean_id = playlist_url.split('/')[-1].split('?')[0]
         tracks_data = []
         
-        # Album vagy Playlist kezelése
+        # Album vagy Playlist betöltése
         if "album" in playlist_url:
             album_info = sp.album(clean_id)
             album_year = int(album_info['release_date'].split('-')[0])
@@ -123,7 +94,7 @@ def load_and_process_playlist(spotify_id, spotify_secret, playlist_url, gemini_k
                     if year_str.isdigit():
                         tracks_data.append({"artist": track['artists'][0]['name'], "title": track['name'], "year": int(year_str), "spotify_id": track['id']})
 
-        # 2. Javítás (MusicBrainz + Gemini)
+        # JAVÍTÁS GEMINIVEL (Ha van kulcs)
         final_db = []
         progress_bar = st.progress(0)
         status_text = st.empty()
@@ -134,22 +105,17 @@ def load_and_process_playlist(spotify_id, spotify_secret, playlist_url, gemini_k
             title = song['title']
             year = song['year']
             
-            status_text.markdown(f"**Feldolgozás:** {artist} - {title} ({year})")
-            
-            # A) Megkérdezzük a MusicBrainz-t
-            mb_year, source = get_original_year_mb(artist, title, year)
-            
-            # B) Ha a MusicBrainz nem talált jobbat (maradt a Spotify év), ÉS van Gemini kulcs -> Kérdezzük a Geminit
-            if source == "Spotify" and gemini_key:
-                # Csak akkor hívjuk meg, ha a felhasználó megadta a kulcsot
-                gemini_year, g_source = get_year_from_gemini(gemini_key, artist, title, year)
-                if gemini_year < year:
-                    year = gemini_year
-                time.sleep(0.5) # Kis pihi az API kímélésére
+            # Ha van Gemini kulcs, megkérdezzük
+            if gemini_key:
+                status_text.markdown(f"**AI Elemzés:** {artist} - {title} ({year} -> ?)")
+                ai_year = get_year_from_gemini(gemini_key, artist, title, year)
+                if ai_year != year:
+                    song['year'] = ai_year
+                    # print(f"Javítva: {title} ({year} -> {ai_year})")
+                time.sleep(0.4) # Kis szünet az API miatt
             else:
-                year = mb_year
-            
-            song['year'] = year
+                status_text.text(f"Betöltés: {artist} - {title}")
+
             final_db.append(song)
             progress_bar.progress((i + 1) / total)
             
@@ -158,35 +124,33 @@ def load_and_process_playlist(spotify_id, spotify_secret, playlist_url, gemini_k
         return final_db
 
     except Exception as e:
-        st.error(f"Kritikus hiba: {e}")
+        st.error(f"Hiba történt: {e}")
         return []
 
-# --- 5. JÁTÉK ÁLLAPOT ---
+# --- 4. ÁLLAPOT KEZELÉS ---
 if 'players' not in st.session_state:
     st.session_state.players = ["Jorgosz", "Lilla", "Józsi", "Dia"]
 if 'game_started' not in st.session_state:
     st.session_state.game_started = False
 
-# --- 6. OLDALSÁV (BEÁLLÍTÁSOK) ---
+# --- 5. OLDALSÁV ---
 with st.sidebar:
     st.header("⚙️ DJ Pult")
     
-    st.subheader("1. Spotify Adatok (Kötelező)")
-    api_id = st.text_input("Spotify Client ID", type="password")
-    api_secret = st.text_input("Spotify Client Secret", type="password")
+    st.subheader("1. Spotify (Kötelező)")
+    api_id = st.text_input("Client ID", type="password")
+    api_secret = st.text_input("Client Secret", type="password")
     pl_url = st.text_input("Playlist/Album Link", value="https://open.spotify.com/playlist/2WQxrq5bmHMlVuzvtwwywV?si=KGQWViY9QESfrZc21btFzA")
     
     st.subheader("2. AI Javítás (Opcionális)")
-    st.caption("Ha beírod a kulcsot, a Gemini kijavítja a hibás évszámokat.")
-    # ITT AZ ÚJ MEZŐ:
+    st.caption("A Gemini kijavítja a hibás 'Remaster' éveket.")
     gemini_key_input = st.text_input("Google Gemini API Key", type="password")
     
     st.divider()
     
     if st.button("🚀 BULI INDÍTÁSA", type="primary"):
         if api_id and api_secret and pl_url:
-            with st.spinner("Zenék letöltése és AI elemzése... (Ez eltarthat egy percig)"):
-                # Átadjuk a beírt kulcsot a függvénynek
+            with st.spinner("Adatok letöltése..."):
                 deck = load_and_process_playlist(api_id, api_secret, pl_url, gemini_key_input)
                 if deck:
                     random.shuffle(deck)
@@ -205,19 +169,17 @@ with st.sidebar:
     for i in range(len(st.session_state.players)):
         st.session_state.players[i] = st.text_input(f"Játékos {i+1}", st.session_state.players[i])
 
-# --- 7. FŐ JÁTÉKTÉR ---
+# --- 6. JÁTÉKTÉR ---
 if not st.session_state.game_started:
-    st.title("📺 TV HITSTER PARTY + AI 🧠")
-    st.markdown("### 👋 Szia! A legokosabb zenei kvíz.")
-    st.info("Töltsd ki az adatokat bal oldalt. Ha megadod a Gemini kulcsot, a játék felismeri a Remastered dalok eredeti évét is!")
+    st.title("📺 TV HITSTER PARTY + GEMINI")
+    st.markdown("### 👋 Szia! Kösd rá a gépet a TV-re!")
+    st.info("Ez a verzió a Spotify adatait használja, és ha megadod a kulcsot, a Google Gemini javítja a dátumokat.")
     st.write(f"Játékosok: {', '.join(st.session_state.players)}")
 
 else:
-    # Változók
     current_player_idx = st.session_state.turn_index % len(st.session_state.players)
     current_player_name = st.session_state.players[current_player_idx]
     
-    # Eredményjelző
     st.markdown("<br>", unsafe_allow_html=True)
     score_cols = st.columns(len(st.session_state.players))
     for idx, player in enumerate(st.session_state.players):
@@ -225,24 +187,16 @@ else:
         score = len(st.session_state.timelines[player])
         active_class = "score-active" if (idx == current_player_idx) else ""
         with score_cols[idx]:
-            st.markdown(f"""
-            <div class="score-card {active_class}">
-                <p class="score-name">{player}</p>
-                <p class="score-num">{score}</p>
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown(f"<div class='score-card {active_class}'><p class='score-name'>{player}</p><p class='score-num'>{score}</p></div>", unsafe_allow_html=True)
 
     st.divider()
 
-    # Logika
     def handle_guess(insert_index):
         p_name = st.session_state.players[st.session_state.turn_index % len(st.session_state.players)]
         timeline = st.session_state.timelines[p_name]
         song = st.session_state.current_mystery_song
-        
         prev_ok = (insert_index == 0) or (timeline[insert_index-1]['year'] <= song['year'])
         next_ok = (insert_index == len(timeline)) or (timeline[insert_index]['year'] >= song['year'])
-        
         if prev_ok and next_ok:
             st.session_state.timelines[p_name].insert(insert_index, song)
             st.session_state.game_msg = f"IGEN! ELTALÁLTAD! 🎉 ({song['year']})"
@@ -261,7 +215,6 @@ else:
             st.session_state.game_phase = "GAME_OVER"
         st.rerun()
 
-    # Megjelenítés
     if st.session_state.game_phase == "GUESSING":
         st.markdown(f"<h2 style='text-align: center;'>🎧 {current_player_name}, te jössz!</h2>", unsafe_allow_html=True)
         mys_song = st.session_state.current_mystery_song
@@ -290,14 +243,12 @@ else:
             st.success(st.session_state.game_msg)
         else:
             st.error(st.session_state.game_msg)
-        
         timeline = st.session_state.timelines[current_player_name]
         d_cols = st.columns(len(timeline))
         for idx, card in enumerate(timeline):
             with d_cols[idx]:
                 style = "border: 4px solid #ffcc00; transform: scale(1.1);" if (card == st.session_state.current_mystery_song and st.session_state.success) else ""
                 st.markdown(f"<div class='timeline-card' style='{style}'><div class='timeline-year'>{card['year']}</div><div>{card['artist']}<br><i>{card['title']}</i></div></div>", unsafe_allow_html=True)
-        
         st.markdown("<br>", unsafe_allow_html=True)
         c1, c2, c3 = st.columns([1,2,1])
         with c2: st.button("KÖVETKEZŐ ➡️", on_click=next_turn, use_container_width=True)

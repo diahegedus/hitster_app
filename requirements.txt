@@ -1,3 +1,3 @@
 streamlit
-spotipy
+spotipy==2.23.0
 google-generative-ai

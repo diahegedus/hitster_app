@@ -7,25 +7,33 @@ import json
 import os
 import socket
 
-# --- NGROK (AUTO-LINK GENERÁTOR) ---
-# Ez generál egy publikus linket, ha a helyi IP nem működne
+# --- 0. NGROK BEÁLLÍTÁS (DEBUG) ---
+# Ez próbál publikus linket generálni, ha a helyi nem működik
 try:
-    from pyngrok import ngrok
-    # Csak akkor indítjuk el, ha még nem fut, hogy ne lassítsa a reload-ot
+    from pyngrok import ngrok, conf
+    
+    # Ha van már futó tunnel, leállítjuk, hogy tisztán induljon
     tunnels = ngrok.get_tunnels()
-    if not tunnels:
-        # Megnyitjuk a 8501-es portot a külvilágnak
-        public_url = ngrok.connect(8501).public_url
-        print(f"🚀 JÁTÉK LINK: {public_url}") 
-        # Kiírjuk a terminálba is, de mentjük session-be, hogy kiírhassuk a TV-re
-        st.session_state.public_url = public_url
-    else:
-        # Ha már fut, visszakeressük a címet
-        st.session_state.public_url = tunnels[0].public_url
+    for t in tunnels:
+        ngrok.disconnect(t.public_url)
+
+    # Tunnel indítása
+    # FIGYELEM: Ha hibát dob (pl. hiányzó AuthToken), azt a konzolra írjuk!
+    try:
+        url = ngrok.connect(8501).public_url
+        st.session_state.public_url = url
+        print(f"\n\n========================================================")
+        print(f"🌍 PUBLIKUS LINK (MOBILHOZ): {url}")
+        print(f"========================================================\n\n")
+    except Exception as e:
+        print(f"⚠️ Ngrok hiba: {e}")
+        st.session_state.public_url = None
+        
 except ImportError:
     st.session_state.public_url = None
+    print("⚠️ A pyngrok nincs telepítve. Csak helyi hálózaton fog menni.")
 
-# Próbáljuk importálni a Groq-ot
+# Groq import
 try:
     from groq import Groq
 except ImportError:
@@ -75,7 +83,7 @@ def get_local_ip():
         s.close()
         return ip
     except:
-        return "Helyi IP nem található"
+        return "Helyi IP ismeretlen"
 
 # --- 2. KONFIGURÁCIÓ ÉS STÍLUS ---
 st.set_page_config(page_title="Hitster Party", page_icon="🎵", layout="wide")
@@ -95,8 +103,13 @@ st.markdown("""
     .insert-btn-container button:hover { background: #00d4ff; color: black; }
     
     .link-box {
-        background: #ff4b4b; color: white; padding: 15px; border-radius: 10px; 
+        background: #2ecc71; color: black; padding: 15px; border-radius: 10px; 
         text-align: center; font-size: 1.2em; font-weight: bold; margin-bottom: 20px;
+        border: 2px solid white;
+    }
+    .local-link-box {
+        background: #34495e; color: white; padding: 10px; border-radius: 10px;
+        text-align: center; font-size: 0.9em; margin-bottom: 20px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -134,7 +147,9 @@ def load_spotify_tracks(api_id, api_secret, playlist_url):
                     if year_str.isdigit():
                         tracks_data.append({"artist": track['artists'][0]['name'], "title": track['name'], "year": int(year_str), "spotify_id": track['id']})
         return tracks_data
-    except: return []
+    except Exception as e:
+        st.error(f"Spotify Hiba: {e}")
+        return []
 
 def fix_card_with_groq(card, api_key):
     if not api_key or Groq is None: return card
@@ -162,12 +177,16 @@ with st.sidebar:
     view_mode = st.radio("Nézet:", ["📺 TV (Kijelző)", "📱 Játékos (Távirányító)"])
     st.markdown("---")
     
-    # URL KIÍRÁSA
+    # URL KIÍRÁSA (OKOS LOGIKA)
     local_url = f"http://{get_local_ip()}:8501"
-    st.info(f"🏠 Helyi Wifi Link:\n`{local_url}`")
     
     if st.session_state.get('public_url'):
-        st.success(f"🌍 Publikus Link (Bárhonnan):\n`{st.session_state.public_url}`")
+        st.success("🌍 ONLINE LINK (Ajánlott):")
+        st.code(st.session_state.public_url, language="text")
+        st.info("Ezt írd be a telefonba, ha a WiFi nem megy!")
+    
+    st.warning("🏠 HELYI WIFI LINK:")
+    st.code(local_url, language="text")
         
     st.markdown("---")
     api_id = st.text_input("Spotify ID", type="password")
@@ -191,14 +210,16 @@ if view_mode == "📺 TV (Kijelző)":
         if state['game_phase'] == "LOBBY":
             st.markdown("<h1 style='text-align:center'>CSATLAKOZZATOK!</h1>", unsafe_allow_html=True)
             
-            # Linkek nagyban a TV-n
+            # HA VAN PUBLIKUS LINK, AZT MUTATJUK NAGYBAN
             if st.session_state.get('public_url'):
                 st.markdown(f"<div class='link-box'>🌍 {st.session_state.public_url}</div>", unsafe_allow_html=True)
-            else:
-                st.markdown(f"<div class='link-box'>🏠 {local_url}</div>", unsafe_allow_html=True)
+                st.caption("Írd be ezt a címet a telefonod böngészőjébe!")
+            
+            # A HELYI LINKET IS MUTATJUK KICSIBEN
+            st.markdown(f"<div class='local-link-box'>🏠 Vagy WiFi-n: {local_url}</div>", unsafe_allow_html=True)
             
             if state['players']:
-                st.write("Játékosok:")
+                st.write("Csatlakozott játékosok:")
                 cols = st.columns(4)
                 for i, p in enumerate(state['players']):
                     cols[i % 4].success(f"👤 {p}")

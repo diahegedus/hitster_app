@@ -11,14 +11,14 @@ if 'game_started' not in st.session_state:
 if 'players' not in st.session_state:
     st.session_state.players = [] 
 if 'ai_logs' not in st.session_state:
-    st.session_state.ai_logs = [] # Itt tároljuk az AI üzeneteit
+    st.session_state.ai_logs = []
 
 # --- 2. KONFIGURÁCIÓ ---
 st.set_page_config(
     page_title="Hitster TV Party", 
     page_icon="🎵", 
     layout="wide",
-    initial_sidebar_state="expanded" # Most nyitva hagyjuk, hogy lásd a logokat!
+    initial_sidebar_state="collapsed" if st.session_state.game_started else "expanded"
 )
 
 # --- 3. STÍLUS 🎨 ---
@@ -30,7 +30,7 @@ st.markdown("""
     }
     #MainMenu, footer {visibility: hidden;}
 
-    /* KÁRTYA */
+    /* KÁRTYA STÍLUS */
     .timeline-card {
         background: linear-gradient(180deg, #1DB954 0%, #117a35 100%);
         color: white;
@@ -97,24 +97,20 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 4. OKOS AI LOGIKA (DEBUG MODE) ---
+# --- 4. OKOS AI LOGIKA (STABIL GEMINI-PRO) ---
 def log_ai(message):
-    """Hozzáad egy üzenetet a loghoz."""
     timestamp = time.strftime("%H:%M:%S")
     st.session_state.ai_logs.insert(0, f"[{timestamp}] {message}")
 
 def fix_card_with_ai(card, api_key):
     if not api_key: 
-        log_ai("⚠️ Nincs API kulcs megadva!")
+        log_ai("⚠️ Nincs API kulcs")
         return card
     
     try:
         genai.configure(api_key=api_key)
-        # Próbáljuk a gyorsabb, újabb modellt, ha nem megy, visszaáll alapra
-        try:
-            model = genai.GenerativeModel('gemini-1.5-flash')
-        except:
-            model = genai.GenerativeModel('gemini-pro')
+        # JAVÍTÁS: Csak a 'gemini-pro' modellt használjuk, ez a biztos pont
+        model = genai.GenerativeModel('gemini-pro')
             
         prompt = f"""
         Fact Check: What is the ORIGINAL single/album release year of "{card['title']}" by "{card['artist']}"?
@@ -133,22 +129,21 @@ def fix_card_with_ai(card, api_key):
             log_ai(f"Analízis: {card['title']} | Spotify: {orig_year} | AI: {ai_year}")
             
             if 1900 < ai_year <= 2025:
-                # HA az AI mást mond
                 if ai_year != orig_year:
-                    # Ha a különbség > 0 (bármilyen eltérésnél hiszünk az AI-nak, ha hitelesnek tűnik)
-                    # Diana Ross esetében: Spotify 2017, AI 1980 -> JAVÍTÁS
-                    card['year'] = ai_year
-                    card['fixed_by_ai'] = True
-                    log_ai(f"✅ JAVÍTVA: {card['title']} -> {ai_year}")
-                    st.toast(f"AI: {card['title']} éve javítva ({orig_year} -> {ai_year})", icon="🤖")
+                    # Ha van eltérés, javítunk (főleg ha >1 év)
+                    if abs(ai_year - orig_year) > 0:
+                        card['year'] = ai_year
+                        card['fixed_by_ai'] = True
+                        log_ai(f"✅ JAVÍTVA: {card['title']} -> {ai_year}")
+                        st.toast(f"AI: {card['title']} éve javítva ({orig_year} -> {ai_year})", icon="🤖")
                 else:
                     log_ai(f"ℹ️ Dátum egyezik ({ai_year})")
         else:
             log_ai(f"❌ AI válasz nem szám: '{text}'")
             
     except Exception as e:
-        log_ai(f"🔥 KRITIKUS HIBA: {str(e)}")
-        st.sidebar.error(f"AI Hiba: {e}")
+        log_ai(f"🔥 HIBA: {str(e)}")
+        # Nem írjuk ki a képernyőre a hibát, hogy ne zavarja a játékot, csak a logba
         
     return card
 
@@ -225,7 +220,7 @@ with st.sidebar:
         if not gemini_key_input:
             st.error("Előbb írd be a kulcsot!")
         else:
-            with st.spinner("Tesztelés..."):
+            with st.spinner("Tesztelés (gemini-pro)..."):
                 test_card = {"title": "Upside Down", "artist": "Diana Ross", "year": 2017}
                 res = fix_card_with_ai(test_card, gemini_key_input)
                 if res['year'] == 1980:
@@ -233,7 +228,6 @@ with st.sidebar:
                 else:
                     st.error(f"❌ HIBA! Az AI nem javított. Válasz: {res['year']}. Nézd meg a logot alul!")
 
-    # LOG KIÍRÁSA
     st.markdown("<b>AI Napló:</b>", unsafe_allow_html=True)
     log_content = "<br>".join(st.session_state.ai_logs)
     st.markdown(f"<div class='log-box'>{log_content}</div>", unsafe_allow_html=True)

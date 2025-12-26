@@ -2,8 +2,9 @@ import streamlit as st
 import random
 import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
-import google.generativeai as genai
+import os
 import time
+from groq import Groq  # Itt az új AI könyvtár!
 
 # --- 1. SESSION STATE ---
 if 'game_started' not in st.session_state:
@@ -97,50 +98,53 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 4. OKOS AI LOGIKA (FAILSAFE) ---
+# --- 4. GROQ AI LOGIKA (ÚJ ÉS GYORS) ---
 def log_ai(message):
     timestamp = time.strftime("%H:%M:%S")
     st.session_state.ai_logs.insert(0, f"[{timestamp}] {message}")
 
-def fix_card_with_ai(card, api_key):
+def fix_card_with_groq(card, api_key):
     if not api_key: 
         return card
     
-    genai.configure(api_key=api_key)
-    
-    # Kézzel definiált lista - ezeket próbáljuk sorban
-    # Nem használjuk a list_models()-t, mert az is hibát dobhat
-    models_to_try = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro', 'gemini-1.0-pro']
-    
-    prompt = f"""
-    Fact Check: What is the ORIGINAL single/album release year of "{card['title']}" by "{card['artist']}"?
-    - Reply with ONLY the 4-digit year. Example: 1980
-    """
-
-    for model_name in models_to_try:
-        try:
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(prompt)
-            text = response.text.strip()
+    try:
+        # Groq kliens inicializálása
+        client = Groq(api_key=api_key)
+        
+        prompt = f"""
+        You are a music historian.
+        Question: What is the ORIGINAL release year of the song "{card['title']}" by "{card['artist']}"?
+        Rules:
+        1. Ignore Remasters, Greatest Hits, or Compilations. I want the year the world first heard this song.
+        2. Reply ONLY with the 4-digit year (e.g., 1980). Do not write any other text.
+        """
+        
+        completion = client.chat.completions.create(
+            model="llama3-8b-8192", # Ez a szupergyors, ingyenes modell
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0, # Precíz válaszok
+            max_tokens=10
+        )
+        
+        text = completion.choices[0].message.content.strip()
+        
+        if text.isdigit():
+            ai_year = int(text)
+            orig_year = card['year']
             
-            if text.isdigit():
-                ai_year = int(text)
-                orig_year = card['year']
-                log_ai(f"✅ Siker ({model_name}): {card['title']} -> {ai_year}")
-                
-                if 1900 < ai_year <= 2025:
-                    if ai_year != orig_year and abs(ai_year - orig_year) > 0:
-                        card['year'] = ai_year
-                        card['fixed_by_ai'] = True
-                        st.toast(f"AI javította: {orig_year} -> {ai_year}", icon="🤖")
-                return card # Ha sikerült, kilépünk
+            log_ai(f"Analízis (Groq): {card['title']} -> {ai_year} (Spotify: {orig_year})")
             
-        except Exception:
-            # Ha ez a modell nem megy, csendben próbáljuk a következőt
-            continue
+            if 1900 < ai_year <= 2025:
+                if ai_year != orig_year and abs(ai_year - orig_year) > 0:
+                    card['year'] = ai_year
+                    card['fixed_by_ai'] = True
+                    st.toast(f"AI javította: {orig_year} -> {ai_year}", icon="🤖")
+        else:
+            log_ai(f"❌ AI válasz nem szám: '{text}'")
             
-    # Ha egyik sem sikerült
-    log_ai(f"⚠️ Egyik AI modell sem válaszolt a dalra: {card['title']}")
+    except Exception as e:
+        log_ai(f"🔥 Groq Hiba: {str(e)}")
+        
     return card
 
 def load_spotify_tracks(spotify_id, spotify_secret, playlist_url):
@@ -151,6 +155,7 @@ def load_spotify_tracks(spotify_id, spotify_secret, playlist_url):
         else: clean_url = playlist_url
         resource_id = clean_url.split("/")[-1]
         tracks_data = []
+        
         if "album" in clean_url:
             album_info = sp.album(resource_id)
             album_year = int(album_info['release_date'].split('-')[0])
@@ -178,7 +183,7 @@ def load_spotify_tracks(spotify_id, spotify_secret, playlist_url):
             return []
         return tracks_data
     except Exception as e:
-        st.error(f"Spotify Hiba: {e}")
+        st.error(f"Hiba: {e}")
         return []
 
 def add_player_callback():
@@ -190,17 +195,14 @@ def add_player_callback():
 # --- 5. OLDALSÁV ---
 with st.sidebar:
     st.title("👥 Játékosok")
-    st.text_input("Írd be a nevet és nyomj Entert:", key="new_player_name", on_change=add_player_callback)
+    st.text_input("Írd be a nevet:", key="new_player_name", on_change=add_player_callback)
     
     if st.session_state.players:
-        st.write("Csatlakoztak:")
         for p in st.session_state.players:
             st.markdown(f"<span class='player-tag'>👤 {p}</span>", unsafe_allow_html=True)
-        if st.button("🗑️ Lista törlése"):
+        if st.button("🗑️ Törlés"):
             st.session_state.players = []
             st.rerun()
-    else:
-        st.info("Adj hozzá valakit!")
 
     st.divider()
     st.header("⚙️ Beállítások")
@@ -208,9 +210,26 @@ with st.sidebar:
     api_secret = st.text_input("Spotify Secret", type="password")
     pl_url = st.text_input("Playlist Link", value="https://open.spotify.com/playlist/2WQxrq5bmHMlVuzvtwwywV?si=KGQWViY9QESfrZc21btFzA")
     
-    st.markdown("### 🧠 AI és Diagnosztika")
-    gemini_key_input = st.text_input("Gemini API Key", type="password")
+    st.markdown("### 🧠 AI Beállítás (Groq)")
+    st.info("Kérj ingyen kulcsot: console.groq.com")
+    groq_key_input = st.text_input("Groq API Key", type="password")
     
+    # TESZT GOMB
+    if st.button("🛠️ AI Teszt (Kattints ide!)"):
+        if not groq_key_input:
+            st.error("Előbb írd be a kulcsot!")
+        else:
+            with st.spinner("Tesztelés..."):
+                try:
+                    test_card = {"title": "Upside Down", "artist": "Diana Ross", "year": 2017}
+                    res = fix_card_with_groq(test_card, groq_key_input)
+                    if res['year'] == 1980:
+                        st.success("✅ SIKER! A Groq AI működik (Diana Ross: 1980).")
+                    else:
+                        st.error(f"❌ Az AI válaszolt ({res['year']}), de nem javított. Nézd a logot!")
+                except Exception as e:
+                     st.error(f"Teszt hiba: {e}")
+
     st.markdown("<b>AI Napló:</b>", unsafe_allow_html=True)
     log_content = "<br>".join(st.session_state.ai_logs)
     st.markdown(f"<div class='log-box'>{log_content}</div>", unsafe_allow_html=True)
@@ -224,17 +243,17 @@ with st.sidebar:
                 if raw_deck:
                     random.shuffle(raw_deck)
                     st.session_state.deck = raw_deck
-                    st.session_state.gemini_key = gemini_key_input
+                    st.session_state.groq_key = groq_key_input
                     st.session_state.timelines = {}
                     for p in st.session_state.players:
                         if not st.session_state.deck: break
                         card = st.session_state.deck.pop()
-                        if gemini_key_input: fix_card_with_ai(card, gemini_key_input)
+                        if groq_key_input: fix_card_with_groq(card, groq_key_input)
                         st.session_state.timelines[p] = [card]
                     
                     if st.session_state.deck:
                         first = st.session_state.deck.pop()
-                        if gemini_key_input: fix_card_with_ai(first, gemini_key_input)
+                        if groq_key_input: fix_card_with_groq(first, groq_key_input)
                         st.session_state.current_mystery_song = first
                         st.session_state.turn_index = 0
                         st.session_state.game_phase = "GUESSING"
@@ -245,7 +264,7 @@ with st.sidebar:
 if st.session_state.game_started:
     curr_p = st.session_state.players[st.session_state.turn_index % len(st.session_state.players)]
     
-    # HEADER
+    # Header
     st.markdown('<div class="mystery-sticky">', unsafe_allow_html=True)
     c_scores = st.columns(len(st.session_state.players))
     for i, p in enumerate(st.session_state.players):
@@ -266,7 +285,7 @@ if st.session_state.game_started:
         st.markdown(f"<h2 style='text-align:center; color:{color}; margin:0;'>{st.session_state.game_msg}</h2>", unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True) 
 
-    # JÁTÉKTÉR
+    # Játéktér
     if st.session_state.game_phase == "GUESSING":
         c1, c2, c3 = st.columns([1,2,1])
         with c2:
@@ -287,7 +306,6 @@ if st.session_state.game_started:
                 elements.append({"type": "btn", "index": i})
                 elements.append({"type": "card", "index": i})
             
-            # Utolsó záró gomb
             if row_end == len(timeline):
                  elements.append({"type": "btn", "index": row_end})
 
@@ -299,8 +317,6 @@ if st.session_state.game_started:
                         i = el["index"]
                         if el["type"] == "btn":
                             st.markdown("<br>", unsafe_allow_html=True)
-                            # FONTOS: Itt tesszük bele a játékos nevét a kulcsba!
-                            # key = btn_JatekosNeve_0
                             unique_key = f"btn_{curr_p}_{i}"
                             
                             if st.button("➕", key=unique_key, use_container_width=True):
@@ -331,8 +347,9 @@ if st.session_state.game_started:
             st.session_state.turn_index += 1
             if st.session_state.deck:
                 next_song = st.session_state.deck.pop()
-                if st.session_state.get('gemini_key'):
-                    fix_card_with_ai(next_song, st.session_state.gemini_key)
+                # Groq használata itt is
+                if st.session_state.get('groq_key'):
+                    fix_card_with_groq(next_song, st.session_state.groq_key)
                 st.session_state.current_mystery_song = next_song
                 st.session_state.game_phase = "GUESSING"
             else:

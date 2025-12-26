@@ -5,16 +5,31 @@ from spotipy.oauth2 import SpotifyClientCredentials
 import google.generativeai as genai
 import time
 
-# --- 1. KONFIGURÁCIÓ ---
-st.set_page_config(page_title="Hitster TV Party", page_icon="📺", layout="wide")
+# --- 1. SESSION STATE (A LEGELEJÉRE KELL!) ---
+# Ezt most felhoztuk ide, hogy már a konfiguráció előtt tudjuk, elindult-e a játék
+if 'game_started' not in st.session_state:
+    st.session_state.game_started = False
 
-# CSS - Itt már csak a finomhangolás marad, a színeket a config.toml intézi
+# --- 2. KONFIGURÁCIÓ (AUTOMATA OLDALSÁVVAL) ---
+st.set_page_config(
+    page_title="Hitster TV Party", 
+    page_icon="📺", 
+    layout="wide",
+    # ITT A TRÜKK: Ha megy a játék, 'collapsed' (csukott), amúgy 'expanded' (nyitott)
+    initial_sidebar_state="collapsed" if st.session_state.game_started else "expanded"
+)
+
+# --- 3. CSS STÍLUS (JAVÍTVA) ---
 st.markdown("""
 <style>
-    /* Eltüntetjük a felső menüt és a footer-t a TV élményért */
-    #MainMenu {visibility: hidden;}
+    .stApp { background: linear-gradient(135deg, #1e1e2e 0%, #2d2b55 100%); color: white; }
+    
+    /* FONTOS: Kivettük a 'header {visibility: hidden;}' sort!
+       Így a bal felső sarokban látszani fog a kis nyíl (>), 
+       amivel bármikor visszahozhatod az oldalsávot!
+    */
+    #MainMenu {visibility: hidden;} /* Csak a jobb oldali menüt rejtjük el */
     footer {visibility: hidden;}
-    header {visibility: hidden;}
     
     .score-card { background-color: rgba(255, 255, 255, 0.1); border-radius: 15px; padding: 15px; text-align: center; border: 2px solid transparent; transition: transform 0.2s; }
     .score-active { border: 3px solid #00d4ff; background-color: rgba(0, 212, 255, 0.15); transform: scale(1.05); box-shadow: 0 0 15px #00d4ff; }
@@ -29,9 +44,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. AI LOGIKA ---
+# --- 4. AI LOGIKA ---
 def fix_card_with_ai(card, api_key):
-    """Egyetlen dal elemzése."""
     if not api_key: return card
     try:
         genai.configure(api_key=api_key)
@@ -46,7 +60,7 @@ def fix_card_with_ai(card, api_key):
     except: pass
     return card
 
-# --- 3. SPOTIFY LETÖLTÉS ---
+# --- 5. SPOTIFY LETÖLTÉS ---
 def load_spotify_tracks(spotify_id, spotify_secret, playlist_url):
     try:
         auth_manager = SpotifyClientCredentials(client_id=spotify_id, client_secret=spotify_secret)
@@ -87,16 +101,15 @@ def load_spotify_tracks(spotify_id, spotify_secret, playlist_url):
         st.error(f"Spotify Hiba: {e}")
         return []
 
-# --- 4. CALLBACKS (JAVÍTVA) ---
-# Fontos: Itt már NINCS st.rerun(), mert az automatikus!
+# --- 6. JÁTÉK MENET ---
+if 'players' not in st.session_state: st.session_state.players = ["Jorgosz", "Lilla", "Józsi", "Dia"]
+
+# Callback a következő körhöz
 def prepare_next_turn():
     st.session_state.turn_index += 1
     if st.session_state.deck:
         next_song = st.session_state.deck.pop()
-        # AI Elemzés itt történik, a háttérben
         if st.session_state.get('gemini_key'):
-             # Mivel ez callback, a spinner nem mindig látszik jól, de az idő telik
-             # Az optimalizálás érdekében itt csak az adatot kérjük le
             fix_card_with_ai(next_song, st.session_state.gemini_key)
         
         st.session_state.current_mystery_song = next_song
@@ -104,10 +117,7 @@ def prepare_next_turn():
     else:
         st.session_state.game_phase = "GAME_OVER"
 
-# --- 5. FŐ APP ---
-if 'players' not in st.session_state: st.session_state.players = ["Jorgosz", "Lilla", "Józsi", "Dia"]
-if 'game_started' not in st.session_state: st.session_state.game_started = False
-
+# --- 7. OLDALSÁV ÉS INDÍTÁS ---
 with st.sidebar:
     st.header("⚙️ Beállítások")
     api_id = st.text_input("Spotify Client ID", type="password")
@@ -141,10 +151,10 @@ with st.sidebar:
                         st.session_state.game_started = True
                         st.rerun()
 
+# --- 8. FŐ KÉPERNYŐ ---
 if st.session_state.game_started:
     curr_p = st.session_state.players[st.session_state.turn_index % len(st.session_state.players)]
     
-    # Pontjelző
     cols = st.columns(len(st.session_state.players))
     for i, p in enumerate(st.session_state.players):
         style = "score-active" if p == curr_p else ""
@@ -156,11 +166,9 @@ if st.session_state.game_started:
         st.markdown(f"<h2 style='text-align:center'>Te jössz, {curr_p}!</h2>", unsafe_allow_html=True)
         song = st.session_state.current_mystery_song
         
-        # --- ZENELEJÁTSZÓ JAVÍTVA (AttributeError Fix) ---
         c1, c2, c3 = st.columns([1,2,1])
         with c2:
             st.markdown(f"<div class='mystery-box'><h3>{song['artist']}</h3><h2>{song['title']}</h2></div>", unsafe_allow_html=True)
-            # A 'with c2:' blokkon belül hívjuk meg közvetlenül a komponenst
             st.components.v1.iframe(f"https://open.spotify.com/embed/track/{song['spotify_id']}", height=80)
         
         timeline = st.session_state.timelines[curr_p]
@@ -184,7 +192,6 @@ if st.session_state.game_started:
         if st.session_state.success: st.balloons(); st.success(st.session_state.game_msg)
         else: st.error(st.session_state.game_msg)
         
-        # A gomb hívja meg a callback-et (Rerun nélkül)
         st.button("Következő dal ➡️", on_click=prepare_next_turn, type="primary")
         
         timeline = st.session_state.timelines[curr_p]
@@ -199,4 +206,4 @@ if st.session_state.game_started:
         if st.button("Újra"): st.session_state.clear(); st.rerun()
 else:
     st.title("📺 Hitster Party")
-    st.info("Kezdéshez töltsd ki az adatokat!")
+    st.info("Kezdéshez töltsd ki az adatokat az oldalsávon! (Nyisd ki a bal felső nyíllal >)")

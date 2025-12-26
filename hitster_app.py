@@ -5,7 +5,7 @@ from spotipy.oauth2 import SpotifyClientCredentials
 import google.generativeai as genai
 import time
 
-# --- 1. SESSION STATE KEZELÉS ---
+# --- 1. SESSION STATE ---
 if 'game_started' not in st.session_state:
     st.session_state.game_started = False
 
@@ -17,139 +17,105 @@ st.set_page_config(
     initial_sidebar_state="collapsed" if st.session_state.game_started else "expanded"
 )
 
-# --- 3. VIZUÁLIS TUNING (CSS MAGIC) ✨ ---
+# --- 3. STÍLUS (FÜGGŐLEGES TIMELINE DESIGN) 🎨 ---
 st.markdown("""
 <style>
-    /* 1. HÁTTÉR: Mély, modern színátmenet */
+    /* HÁTTÉR */
     .stApp {
         background: radial-gradient(circle at center, #2b2d42 0%, #1a1a2e 100%);
         color: #edf2f4;
-        font-family: 'Helvetica Neue', sans-serif;
+    }
+    #MainMenu, footer {visibility: hidden;}
+
+    /* IDŐVONAL KÁRTYA (Széles) */
+    .timeline-card {
+        background: linear-gradient(90deg, #1DB954 0%, #117a35 100%);
+        color: white;
+        padding: 15px 25px;
+        border-radius: 12px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin: 0 auto;
+        max-width: 600px; /* Ne legyen túl széles TV-n se */
+        box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+        border: 1px solid rgba(255,255,255,0.1);
+    }
+    .card-year { font-size: 2.5em; font-weight: 900; margin-right: 20px; text-shadow: 2px 2px 0 rgba(0,0,0,0.2); }
+    .card-info { text-align: left; flex-grow: 1; }
+    .card-artist { font-size: 1em; opacity: 0.9; }
+    .card-title { font-size: 1.4em; font-weight: bold; }
+
+    /* BESZÚRÓ GOMBOK (DROP ZONES) */
+    /* Ezek a gombok mostantól szaggatott vonalú dobozok a kártyák között */
+    .insert-btn-wrapper button {
+        background-color: transparent !important;
+        border: 2px dashed #555 !important;
+        color: #888 !important;
+        border-radius: 10px !important;
+        width: 100%;
+        max-width: 600px;
+        margin: 5px auto;
+        display: block;
+        transition: all 0.2s;
+    }
+    .insert-btn-wrapper button:hover {
+        border-color: #00d4ff !important;
+        color: #00d4ff !important;
+        background-color: rgba(0, 212, 255, 0.05) !important;
+        transform: scale(1.02);
     }
 
-    /* 2. ELTÜNTETJÜK A FELESLEGES ELEMEKET (De a menügomb marad!) */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    
-    /* 3. EREDMÉNYJELZŐ (GLASSMORPHISM) */
-    .score-card {
-        background: rgba(255, 255, 255, 0.05);
-        backdrop-filter: blur(10px);
-        -webkit-backdrop-filter: blur(10px);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 20px;
+    /* FŐ GOMBOK (Indítás, Tovább) - Ezek maradnak színesek */
+    .main-action-btn button {
+        background: linear-gradient(90deg, #ff4b4b 0%, #d90429 100%) !important;
+        color: white !important;
+        border: none !important;
+        font-weight: bold;
+        font-size: 1.2em;
+    }
+
+    /* REJTÉLYES DOBOZ (STICKY - Mindig látható felül) */
+    .mystery-sticky {
+        position: sticky;
+        top: 0;
+        z-index: 999;
+        background: rgba(26, 26, 46, 0.95);
+        padding: 15px 0;
+        border-bottom: 2px solid #ff4b4b;
+        margin-bottom: 20px;
+        backdrop-filter: blur(5px);
+    }
+    .mystery-box {
+        border: 2px solid #ff4b4b;
+        border-radius: 15px;
         padding: 15px;
         text-align: center;
-        transition: all 0.3s ease;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
-    }
-    
-    /* Az aktív játékos NEON keretet kap */
-    .score-active {
-        border: 2px solid #00d4ff;
-        box-shadow: 0 0 20px rgba(0, 212, 255, 0.6);
-        transform: scale(1.08);
-        background: rgba(0, 212, 255, 0.1);
-    }
-    
-    .score-num {
-        font-size: 3.5em; /* Óriás számok TV-re */
-        font-weight: 800;
-        color: #ffd166;
-        margin: 0;
-        text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
-    }
-    
-    .score-name {
-        font-size: 1.2em;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-        margin-top: 5px;
+        background: #222;
+        max-width: 600px;
+        margin: 0 auto;
     }
 
-    /* 4. IDŐVONAL KÁRTYÁK (Spotify Stílus) */
-    .timeline-card {
-        background: linear-gradient(145deg, #1DB954 0%, #117a35 100%);
-        color: white;
-        padding: 20px 10px;
-        border-radius: 15px;
+    /* PONTOZÁS */
+    .score-container {
+        display: flex;
+        justify-content: center;
+        gap: 20px;
+        margin-bottom: 20px;
+    }
+    .score-box {
+        background: rgba(255,255,255,0.05);
+        padding: 10px 20px;
+        border-radius: 10px;
         text-align: center;
-        margin: 10px 5px;
-        box-shadow: 0 10px 20px rgba(0,0,0,0.4);
-        border: 1px solid rgba(255,255,255,0.2);
-        transition: transform 0.2s;
+        min-width: 100px;
     }
-    .timeline-card:hover {
-        transform: translateY(-5px);
-    }
-    
-    .timeline-year {
-        font-size: 2.2em;
-        font-weight: 900;
-        border-bottom: 2px solid rgba(255,255,255,0.4);
-        margin-bottom: 8px;
-        padding-bottom: 5px;
-        text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
-    }
-
-    /* 5. REJTÉLYES DOBOZ (PULZÁLÓ ANIMÁCIÓ) */
-    @keyframes pulse-border {
-        0% { border-color: #ff4b4b; box-shadow: 0 0 0 0 rgba(255, 75, 75, 0.7); }
-        70% { border-color: #ff4b4b; box-shadow: 0 0 20px 10px rgba(255, 75, 75, 0); }
-        100% { border-color: #ff4b4b; box-shadow: 0 0 0 0 rgba(255, 75, 75, 0); }
-    }
-    
-    .mystery-box {
-        background-color: rgba(30, 30, 30, 0.8);
-        border: 3px solid #ff4b4b;
-        border-radius: 20px;
-        padding: 30px;
-        text-align: center;
-        margin: 20px 0;
-        animation: pulse-border 2s infinite;
-    }
-    
-    .mystery-artist { font-size: 1.2em; color: #bbb; margin-bottom: 5px; }
-    .mystery-title { font-size: 2.2em; font-weight: bold; color: white; margin: 0; }
-
-    /* 6. GOMBOK */
-    div.stButton > button {
-        background: linear-gradient(90deg, #ff4b4b 0%, #d90429 100%);
-        color: white;
-        font-size: 18px !important;
-        font-weight: bold;
-        padding: 12px 28px;
-        border-radius: 50px;
-        border: none;
-        box-shadow: 0 4px 15px rgba(255, 75, 75, 0.4);
-        transition: all 0.3s ease;
-        width: 100%;
-    }
-    div.stButton > button:hover {
-        transform: scale(1.05);
-        box-shadow: 0 6px 20px rgba(255, 75, 75, 0.6);
-    }
-    div.stButton > button:active {
-        transform: scale(0.95);
-    }
-    
-    /* Kisebb "IDE" gombok az idővonalban */
-    div[data-testid="column"] button {
-        background: #4a4e69;
-        box-shadow: none;
-        font-size: 14px !important;
-        padding: 8px 0;
-    }
-    div[data-testid="column"] button:hover {
-        background: #00d4ff;
-        color: #1a1a2e;
-    }
+    .score-active { border: 2px solid #00d4ff; box-shadow: 0 0 10px #00d4ff; }
 
 </style>
 """, unsafe_allow_html=True)
 
-# --- 4. AI LOGIKA ---
+# --- 4. LOGIKA ---
 def fix_card_with_ai(card, api_key):
     if not api_key: return card
     try:
@@ -165,16 +131,13 @@ def fix_card_with_ai(card, api_key):
     except: pass
     return card
 
-# --- 5. SPOTIFY LETÖLTÉS ---
 def load_spotify_tracks(spotify_id, spotify_secret, playlist_url):
     try:
         auth_manager = SpotifyClientCredentials(client_id=spotify_id, client_secret=spotify_secret)
         sp = spotipy.Spotify(auth_manager=auth_manager)
-        
         if "?" in playlist_url: clean_url = playlist_url.split("?")[0]
         else: clean_url = playlist_url
         resource_id = clean_url.split("/")[-1]
-        
         tracks_data = []
         if "album" in clean_url:
             album_info = sp.album(resource_id)
@@ -199,54 +162,48 @@ def load_spotify_tracks(spotify_id, spotify_secret, playlist_url):
                     if year_str.isdigit():
                         tracks_data.append({"artist": track['artists'][0]['name'], "title": track['name'], "year": int(year_str), "spotify_id": track['id']})
         else:
-            st.error("Érvénytelen link!")
+            st.error("Hibás link!")
             return []
         return tracks_data
     except Exception as e:
-        st.error(f"Spotify Hiba: {e}")
+        st.error(f"Hiba: {e}")
         return []
 
-# --- 6. CALLBACKS ---
 def prepare_next_turn():
     st.session_state.turn_index += 1
     if st.session_state.deck:
         next_song = st.session_state.deck.pop()
-        # AI Elemzés
         if st.session_state.get('gemini_key'):
             fix_card_with_ai(next_song, st.session_state.gemini_key)
-        
         st.session_state.current_mystery_song = next_song
         st.session_state.game_phase = "GUESSING"
     else:
         st.session_state.game_phase = "GAME_OVER"
 
-# --- 7. INDÍTÁS ÉS SIDEBAR ---
+# --- 5. APP STRUKTÚRA ---
 if 'players' not in st.session_state: st.session_state.players = ["Jorgosz", "Lilla", "Józsi", "Dia"]
 
 with st.sidebar:
     st.header("⚙️ DJ Pult")
-    api_id = st.text_input("Spotify Client ID", type="password")
-    api_secret = st.text_input("Spotify Client Secret", type="password")
+    api_id = st.text_input("Spotify ID", type="password")
+    api_secret = st.text_input("Spotify Secret", type="password")
     pl_url = st.text_input("Playlist Link", value="https://open.spotify.com/playlist/2WQxrq5bmHMlVuzvtwwywV?si=KGQWViY9QESfrZc21btFzA")
-    gemini_key_input = st.text_input("Gemini API Key (Opcionális)", type="password")
-    st.divider()
-    
-    if st.button("🚀 BULI INDÍTÁSA", type="primary"):
+    gemini_key_input = st.text_input("Gemini API (Opcionális)", type="password")
+    st.markdown('<div class="main-action-btn">', unsafe_allow_html=True)
+    if st.button("🚀 BULI INDÍTÁSA"):
         if api_id and api_secret and pl_url:
-            with st.spinner("Lemezek válogatása... 💿"):
+            with st.spinner("Betöltés..."):
                 raw_deck = load_spotify_tracks(api_id, api_secret, pl_url)
                 if raw_deck:
                     random.shuffle(raw_deck)
                     st.session_state.deck = raw_deck
                     st.session_state.gemini_key = gemini_key_input
-                    
                     st.session_state.timelines = {}
                     for p in st.session_state.players:
                         if not st.session_state.deck: break
                         card = st.session_state.deck.pop()
                         if gemini_key_input: fix_card_with_ai(card, gemini_key_input)
                         st.session_state.timelines[p] = [card]
-
                     if st.session_state.deck:
                         first = st.session_state.deck.pop()
                         if gemini_key_input: fix_card_with_ai(first, gemini_key_input)
@@ -255,109 +212,122 @@ with st.sidebar:
                         st.session_state.game_phase = "GUESSING"
                         st.session_state.game_started = True
                         st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
 
-# --- 8. FŐ JÁTÉKTÉR ---
 if st.session_state.game_started:
-    # Aktív játékos
     curr_p = st.session_state.players[st.session_state.turn_index % len(st.session_state.players)]
     
-    # Eredményjelző
-    st.markdown("<br>", unsafe_allow_html=True)
+    # --- FELSŐ RÉSZ (FIX) ---
+    st.markdown('<div class="mystery-sticky">', unsafe_allow_html=True)
+    
+    # Pontszámok (Kompakt)
     cols = st.columns(len(st.session_state.players))
     for i, p in enumerate(st.session_state.players):
-        style = "score-active" if p == curr_p else ""
-        if p not in st.session_state.timelines: st.session_state.timelines[p] = []
-        
-        with cols[i]:
-            st.markdown(f"""
-            <div class='score-card {style}'>
-                <p class='score-name'>{p}</p>
-                <p class='score-num'>{len(st.session_state.timelines[p])}</p>
+        active = "score-active" if p == curr_p else ""
+        timeline_len = len(st.session_state.timelines.get(p, []))
+        cols[i].markdown(f"""
+            <div class='score-box {active}'>
+                <div style='font-size:0.8em; opacity:0.8'>{p}</div>
+                <div style='font-size:1.5em; font-weight:bold; color:#ffcc00'>{timeline_len}</div>
             </div>
-            """, unsafe_allow_html=True)
-            
-    st.markdown("<hr style='border-top: 1px solid rgba(255,255,255,0.1); margin: 30px 0;'>", unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
 
+    # Rejtélyes dal doboz
     if st.session_state.game_phase == "GUESSING":
-        st.markdown(f"<h1 style='text-align:center; font-size: 3em; margin-bottom: 20px;'>🎧 Te jössz, <span style='color:#00d4ff'>{curr_p}</span>!</h1>", unsafe_allow_html=True)
         song = st.session_state.current_mystery_song
-        
-        c1, c2, c3 = st.columns([1, 2, 1])
-        with c2:
-            st.markdown(f"""
-            <div class='mystery-box'>
-                <div class='mystery-artist'>{song['artist']}</div>
-                <div class='mystery-title'>{song['title']}</div>
-            </div>
-            """, unsafe_allow_html=True)
-            st.components.v1.iframe(f"https://open.spotify.com/embed/track/{song['spotify_id']}", height=80)
-        
-        st.markdown("<h3 style='text-align:center; margin-top:30px;'>👇 Hova illik ez a dal? Válassz helyet! 👇</h3>", unsafe_allow_html=True)
-        
-        timeline = st.session_state.timelines[curr_p]
-        t_cols = st.columns(len(timeline)*2 + 1)
-        
-        for i in range(len(timeline)+1):
-            with t_cols[i*2]:
-                st.markdown("<div style='height: 100%; display: flex; align-items: center; justify-content: center;'>", unsafe_allow_html=True)
-                if st.button("Itt?", key=f"b{i}", use_container_width=True):
-                    prev_ok = (i==0) or (timeline[i-1]['year'] <= song['year'])
-                    next_ok = (i==len(timeline)) or (timeline[i]['year'] >= song['year'])
-                    st.session_state.success = (prev_ok and next_ok)
-                    st.session_state.game_msg = f"🏆 TALÁLT! ({song['year']})" if st.session_state.success else f"❌ SAJNOS NEM... ({song['year']})"
-                    if st.session_state.success: st.session_state.timelines[curr_p].insert(i, song)
-                    st.session_state.game_phase = "REVEAL"
-                    st.rerun()
-                st.markdown("</div>", unsafe_allow_html=True)
-                
-            if i < len(timeline):
-                with t_cols[i*2+1]:
-                    card = timeline[i]
-                    st.markdown(f"""
-                    <div class='timeline-card'>
-                        <div class='timeline-year'>{card['year']}</div>
-                        <div style='font-size:0.9em;'>{card['artist']}</div>
-                        <div style='font-weight:bold; font-size:1.1em;'>{card['title']}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-
+        st.markdown(f"""
+        <div class='mystery-box'>
+            <div style='color:#bbb; font-size:0.9em;'>Most játszott:</div>
+            <div style='font-size:1.2em; color:#fff;'>{song['artist']}</div>
+            <div style='font-size:1.8em; font-weight:bold; color:#ff4b4b;'>{song['title']}</div>
+        </div>
+        """, unsafe_allow_html=True)
     elif st.session_state.game_phase == "REVEAL":
-        if st.session_state.success:
-            st.balloons()
-            st.markdown(f"<div style='text-align:center; padding: 20px; background: rgba(0,255,0,0.2); border-radius: 15px;'><h1>{st.session_state.game_msg}</h1></div>", unsafe_allow_html=True)
-        else:
-            st.snow() # Hóesés, ha rossz a válasz (szomorúbb hatás)
-            st.markdown(f"<div style='text-align:center; padding: 20px; background: rgba(255,0,0,0.2); border-radius: 15px;'><h1>{st.session_state.game_msg}</h1></div>", unsafe_allow_html=True)
+        res_color = "#00ff00" if st.session_state.success else "#ff0000"
+        st.markdown(f"""
+        <div class='mystery-box' style='border-color:{res_color}'>
+            <h2 style='color:{res_color}; margin:0;'>{st.session_state.game_msg}</h2>
+        </div>
+        """, unsafe_allow_html=True)
         
-        st.markdown("<br>", unsafe_allow_html=True)
-        c1, c2, c3 = st.columns([1, 2, 1])
+    st.markdown('</div>', unsafe_allow_html=True) 
+    # --- FELSŐ RÉSZ VÉGE ---
+
+    # --- FÜGGŐLEGES IDŐVONAL ---
+    if st.session_state.game_phase == "GUESSING":
+        # Lejátszó
+        c1, c2, c3 = st.columns([1,2,1])
         with c2:
-            st.button("KÖVETKEZŐ JÁTÉKOS ➡️", on_click=prepare_next_turn, type="primary")
+             st.components.v1.iframe(f"https://open.spotify.com/embed/track/{st.session_state.current_mystery_song['spotify_id']}", height=80)
         
-        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown(f"<h3 style='text-align:center'>👇 {curr_p}, hova teszed az idővonaladon? 👇</h3>", unsafe_allow_html=True)
+        
         timeline = st.session_state.timelines[curr_p]
-        d_cols = st.columns(len(timeline))
-        for idx, card in enumerate(timeline):
-            with d_cols[idx]:
-                is_new = (card == st.session_state.current_mystery_song and st.session_state.success)
-                style = "border: 4px solid #ffd166; transform: scale(1.1); box-shadow: 0 0 15px gold;" if is_new else ""
+        
+        # A CIKLUS MOST FÜGGŐLEGESEN ÉPÍTKEZIK
+        for i in range(len(timeline) + 1):
+            
+            # 1. BESZÚRÓ GOMB (GAP)
+            st.markdown('<div class="insert-btn-wrapper">', unsafe_allow_html=True)
+            if st.button(f"➕ Ide illik? ➕", key=f"gap_{i}"):
+                song = st.session_state.current_mystery_song
+                prev_ok = (i==0) or (timeline[i-1]['year'] <= song['year'])
+                next_ok = (i==len(timeline)) or (timeline[i]['year'] >= song['year'])
+                st.session_state.success = (prev_ok and next_ok)
+                st.session_state.game_msg = f"{song['year']}"
+                if st.session_state.success: st.session_state.timelines[curr_p].insert(i, song)
+                st.session_state.game_phase = "REVEAL"
+                st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+
+            # 2. KÁRTYA (HA VAN)
+            if i < len(timeline):
+                card = timeline[i]
                 st.markdown(f"""
-                <div class='timeline-card' style='{style}'>
-                    <div class='timeline-year'>{card['year']}</div>
-                    <div>{card['artist']}</div>
-                    <div><b>{card['title']}</b></div>
+                <div class='timeline-card'>
+                    <div class='card-year'>{card['year']}</div>
+                    <div class='card-info'>
+                        <div class='card-artist'>{card['artist']}</div>
+                        <div class='card-title'>{card['title']}</div>
+                    </div>
                 </div>
                 """, unsafe_allow_html=True)
+                
+                # Kis nyilacska lefelé
+                if i < len(timeline) - 0:
+                    st.markdown("<div style='text-align:center; font-size:1.5em; opacity:0.3; margin:-10px 0;'>⬇</div>", unsafe_allow_html=True)
+
+    elif st.session_state.game_phase == "REVEAL":
+        if st.session_state.success: st.balloons()
+        
+        st.markdown('<div class="main-action-btn" style="text-align:center; margin:20px;">', unsafe_allow_html=True)
+        st.button("Következő Játékos ➡️", on_click=prepare_next_turn)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # Csak a kártyák listája (gombok nélkül)
+        timeline = st.session_state.timelines[curr_p]
+        for card in timeline:
+            highlight = "border: 3px solid #ffd166; transform: scale(1.05);" if (card == st.session_state.current_mystery_song and st.session_state.success) else ""
+            st.markdown(f"""
+            <div class='timeline-card' style='{highlight}'>
+                <div class='card-year'>{card['year']}</div>
+                <div class='card-info'>
+                    <div class='card-artist'>{card['artist']}</div>
+                    <div class='card-title'>{card['title']}</div>
+                </div>
+            </div>
+            <div style='text-align:center; font-size:1.5em; opacity:0.3; margin:-10px 0;'>⬇</div>
+            """, unsafe_allow_html=True)
 
     elif st.session_state.game_phase == "GAME_OVER":
-        st.title("🎉 VÉGE A BULINAK! 🎉")
+        st.markdown("<h1 style='text-align:center; color:gold'>🏆 JÁTÉK VÉGE! 🏆</h1>", unsafe_allow_html=True)
         winner = max(st.session_state.timelines, key=lambda k: len(st.session_state.timelines[k]))
-        st.markdown(f"<h1 style='text-align:center; font-size:4em; color: gold;'>A GYŐZTES: {winner}</h1>", unsafe_allow_html=True)
+        st.markdown(f"<h2 style='text-align:center'>Győztes: {winner}</h2>", unsafe_allow_html=True)
         st.balloons()
-        if st.button("Új Játék Indítása", use_container_width=True): 
-            st.session_state.clear()
-            st.rerun()
+        st.markdown('<div class="main-action-btn" style="text-align:center;">', unsafe_allow_html=True)
+        if st.button("Újra"): st.session_state.clear(); st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
 else:
-    # Kezdőképernyő
-    st.markdown("<h1 style='text-align:center; margin-top: 100px;'>📺 Hitster TV Party</h1>", unsafe_allow_html=True)
-    st.markdown("<h3 style='text-align:center; color: #aaa;'>Nyisd ki a bal oldali menüt (>), és add meg az adatokat a kezdéshez!</h3>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align:center; margin-top:100px;'>📺 TV HITSTER</h1>", unsafe_allow_html=True)
+    st.markdown("<h3 style='text-align:center; color:#aaa'>Nyisd ki a bal oldali menüt a kezdéshez!</h3>", unsafe_allow_html=True)

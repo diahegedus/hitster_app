@@ -122,7 +122,7 @@ def fix_card_with_groq(card, api_key):
         - Reply ONLY with the 4-digit year (e.g. 1980). No text.
         """
         
-        # --- JAVÍTÁS: ÚJ, MŰKÖDŐ MODELL ---
+        # --- JAVÍTVA: A LEGÚJABB MŰKÖDŐ MODELL ---
         completion = client.chat.completions.create(
             model="llama-3.3-70b-versatile", 
             messages=[{"role": "user", "content": prompt}],
@@ -226,7 +226,7 @@ with st.sidebar:
                     test_card = {"title": "Upside Down", "artist": "Diana Ross", "year": 2017}
                     res = fix_card_with_groq(test_card, groq_key_input)
                     if res['year'] == 1980:
-                        st.success("✅ SIKER! Groq (Llama 3) működik.")
+                        st.success("✅ SIKER! Groq (Llama 3.3) működik.")
                     else:
                         st.error(f"❌ Az AI válaszolt ({res['year']}), de nem javított.")
                 except Exception as e:
@@ -297,56 +297,50 @@ if st.session_state.game_started:
         
         timeline = st.session_state.timelines[curr_p]
         
-        # --- BIZTONSÁGOS RÁCS RENDER ---
+        # --- GRID RENDER ---
         CARDS_PER_ROW = 4
         
-        # Először létrehozzuk a TELJES listát (Gomb, Kártya, Gomb, Kártya...)
-        # Így könnyebb kezelni a tördelést
-        full_items = []
-        for i in range(len(timeline)):
-            full_items.append({"type": "btn", "index": i})
-            full_items.append({"type": "card", "index": i})
-        # Záró gomb a végére
-        full_items.append({"type": "btn", "index": len(timeline)})
-        
-        # Most tördeljük sorokra
-        ITEMS_PER_ROW = CARDS_PER_ROW * 2 # Mert egy kártya = 2 elem (gomb+kártya)
-        
-        for i in range(0, len(full_items), ITEMS_PER_ROW):
-            row_items = full_items[i : i + ITEMS_PER_ROW]
+        for row_start in range(0, len(timeline), CARDS_PER_ROW):
+            row_end = min(row_start + CARDS_PER_ROW, len(timeline))
             
-            # Dinamikus oszlopok: Gomb keskeny, Kártya széles
-            cols = st.columns([1 if item["type"]=="btn" else 4 for item in row_items])
+            elements = []
+            for i in range(row_start, row_end):
+                elements.append({"type": "btn", "index": i})
+                elements.append({"type": "card", "index": i})
             
-            for idx, item in enumerate(row_items):
-                with cols[idx]:
-                    if item["type"] == "btn":
-                        # EGYEDI KULCS: játékos + index + típus
-                        # Ez garantálja, hogy sosem akad össze
-                        btn_key = f"insert_{curr_p}_{item['index']}"
-                        
-                        st.markdown('<div class="insert-btn-container">', unsafe_allow_html=True)
-                        if st.button("➕", key=btn_key, use_container_width=True):
-                            song = st.session_state.current_mystery_song
-                            pos = item['index']
-                            prev_ok = (pos==0) or (timeline[pos-1]['year'] <= song['year'])
-                            next_ok = (pos==len(timeline)) or (timeline[pos]['year'] >= song['year'])
-                            st.session_state.success = (prev_ok and next_ok)
-                            st.session_state.game_msg = f"TALÁLT! ({song['year']})" if st.session_state.success else f"NEM... ({song['year']})"
-                            if st.session_state.success: st.session_state.timelines[curr_p].insert(pos, song)
-                            st.session_state.game_phase = "REVEAL"
-                            st.rerun()
-                        st.markdown('</div>', unsafe_allow_html=True)
-                    else:
-                        card = timeline[item['index']]
-                        ai_badge = "<span class='ai-badge'>✨</span>" if card.get('fixed_by_ai') else ""
-                        st.markdown(f"""
-                        <div class='timeline-card'>
-                            <div class='card-year'>{card['year']}{ai_badge}</div>
-                            <div class='card-title'>{card['title']}</div>
-                            <div class='card-artist'>{card['artist']}</div>
-                        </div>
-                        """, unsafe_allow_html=True)
+            if row_end == len(timeline):
+                 elements.append({"type": "btn", "index": row_end})
+
+            if elements:
+                cols = st.columns([1 if e["type"]=="btn" else 4 for e in elements])
+                
+                for idx, el in enumerate(elements):
+                    with cols[idx]:
+                        i = el["index"]
+                        if el["type"] == "btn":
+                            st.markdown('<div class="insert-btn-container">', unsafe_allow_html=True)
+                            unique_key = f"btn_{curr_p}_{i}"
+                            
+                            if st.button("➕", key=unique_key, use_container_width=True):
+                                song = st.session_state.current_mystery_song
+                                prev_ok = (i==0) or (timeline[i-1]['year'] <= song['year'])
+                                next_ok = (i==len(timeline)) or (timeline[i]['year'] >= song['year'])
+                                st.session_state.success = (prev_ok and next_ok)
+                                st.session_state.game_msg = f"TALÁLT! ({song['year']})" if st.session_state.success else f"NEM... ({song['year']})"
+                                if st.session_state.success: st.session_state.timelines[curr_p].insert(i, song)
+                                st.session_state.game_phase = "REVEAL"
+                                st.rerun()
+                            st.markdown('</div>', unsafe_allow_html=True)
+                        else:
+                            card = timeline[i]
+                            ai_badge = "<span class='ai-badge'>✨</span>" if card.get('fixed_by_ai') else ""
+                            st.markdown(f"""
+                            <div class='timeline-card'>
+                                <div class='card-year'>{card['year']}{ai_badge}</div>
+                                <div class='card-title'>{card['title']}</div>
+                                <div class='card-artist'>{card['artist']}</div>
+                            </div>
+                            """, unsafe_allow_html=True)
             st.markdown("<br>", unsafe_allow_html=True)
 
     elif st.session_state.game_phase == "REVEAL":
@@ -356,6 +350,7 @@ if st.session_state.game_started:
             st.session_state.turn_index += 1
             if st.session_state.deck:
                 next_song = st.session_state.deck.pop()
+                # Groq használata itt is
                 if st.session_state.get('groq_key'):
                     fix_card_with_groq(next_song, st.session_state.groq_key)
                 st.session_state.current_mystery_song = next_song

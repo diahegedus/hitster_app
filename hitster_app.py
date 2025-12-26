@@ -9,17 +9,16 @@ import os
 import qrcode
 from io import BytesIO
 
-# --- 0. KONFIGURÁCIÓ ÉS URL KEZELÉS ---
+# --- 0. KONFIGURÁCIÓ ---
 st.set_page_config(page_title="Hitster Party", page_icon="🎵", layout="wide")
 
-# 🔗 URL Paraméter feldolgozása (Fix #3)
 if "role" in st.query_params:
-    if st.query_params["role"] == "player":
-        st.session_state.user_role = "player"
-    elif st.query_params["role"] == "tv":
-        st.session_state.user_role = "tv"
+    st.session_state.user_role = st.query_params["role"]
 
 if 'user_role' not in st.session_state: st.session_state.user_role = "tv"
+if 'sound_enabled' not in st.session_state: st.session_state.sound_enabled = False
+# Session szintű verziókövetés a stabil player élményért
+if 'local_version' not in st.session_state: st.session_state.local_version = 0
 
 # --- ALAPOK ---
 try:
@@ -38,12 +37,11 @@ def get_db_connection():
 def init_db():
     with get_db_connection() as conn:
         c = conn.cursor()
-        c.execute('''CREATE TABLE IF NOT EXISTS game_state
-                     (id INTEGER PRIMARY KEY, data TEXT)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS game_state (id INTEGER PRIMARY KEY, data TEXT)''')
         c.execute("SELECT count(*) FROM game_state WHERE id=1")
         if c.fetchone()[0] == 0:
             default_state = {
-                "version": 0, # 🔒 Optimistic Locking
+                "version": 0,
                 "game_phase": "LOBBY",
                 "players": [],
                 "timelines": {},
@@ -56,12 +54,12 @@ def init_db():
                 "success": False,
                 "waiting_for_reveal": False,
                 "reveal_processed": False,
-                "reveal_ui_shown": False, # ♻️ UI Villogás ellen
+                "reveal_ui_shown": False,
                 "sound_trigger": None,
                 "sound_played": False,
                 "winner": None,
                 "target_score": 10,
-                "correct_answer_log": None
+                "last_revealed_song": None
             }
             c.execute("INSERT INTO game_state (id, data) VALUES (1, ?)", (json.dumps(default_state),))
             conn.commit()
@@ -88,8 +86,8 @@ def reset_db():
             "reveal_ui_shown": False,
             "winner": None,
             "target_score": 10,
-            "correct_answer_log": None,
-            "sound_trigger": None,
+            "last_revealed_song": None,
+            "sound_trigger": None, # 🧹 Explicit cleanup
             "sound_played": False
         }
         c.execute("UPDATE game_state SET data = ? WHERE id = 1", (json.dumps(new_state),))
@@ -106,10 +104,11 @@ def load_state():
             else: init_db(); return load_state()
     except: return {}
 
-def save_state(state):
+def save_state(state, bump_version=True):
     try:
-        # 🔒 Verzió növelése mentéskor
-        state['version'] = state.get('version', 0) + 1
+        if bump_version:
+            state['version'] = state.get('version', 0) + 1
+        
         with get_db_connection() as conn:
             c = conn.cursor()
             c.execute("UPDATE game_state SET data = ? WHERE id = 1", (json.dumps(state),))
@@ -128,11 +127,16 @@ def check_guess_logic(timeline, song, pos):
     next_card = timeline[pos]
     return (prev_card['year'] <= song['year']) and (next_card['year'] >= song['year'])
 
-# --- 3. SPOTIFY & AI (VALÓDI CACHE ⚡) ---
+# --- 3. SPOTIFY & AI (CACHE OPTIMALIZÁLT) ---
 @st.cache_data(ttl=3600, show_spinner=False)
-def load_spotify_tracks(api_id, api_secret, playlist_url):
+def load_spotify_tracks(playlist_url, limit=80):
+    # API kulcsok belső feloldása (Cache-barát)
+    api_id = st.secrets.get("SPOTIFY_ID")
+    api_secret = st.secrets.get("SPOTIFY_SECRET")
+    
+    if not api_id or not api_secret: return []
+
     try:
-        LIMIT = 150
         auth_manager = SpotifyClientCredentials(client_id=api_id, client_secret=api_secret)
         sp = spotipy.Spotify(auth_manager=auth_manager)
         if "?" in playlist_url: clean_url = playlist_url.split("?")[0]
@@ -150,11 +154,11 @@ def load_spotify_tracks(api_id, api_secret, playlist_url):
             year = int(album_info['release_date'][:4])
             img_url = get_image(album_info)
             items = results['items']
-            while results['next'] and len(items) < LIMIT:
+            while results['next'] and len(items) < limit:
                 results = sp.next(results)
                 items.extend(results['items'])
             for track in items:
-                if len(tracks_data) >= LIMIT: break
+                if len(tracks_data) >= limit: break
                 tracks_data.append({
                     "artist": track['artists'][0]['name'], "title": track['name'], "year": year, 
                     "spotify_id": track['id'], "image": img_url
@@ -162,11 +166,11 @@ def load_spotify_tracks(api_id, api_secret, playlist_url):
         elif "playlist" in clean_url:
             results = sp.playlist_items(resource_id)
             items = results['items']
-            while results['next'] and len(items) < LIMIT:
+            while results['next'] and len(items) < limit:
                 results = sp.next(results)
                 items.extend(results['items'])
             for item in items:
-                if len(tracks_data) >= LIMIT: break
+                if len(tracks_data) >= limit: break
                 t = item['track']
                 if t and t['album']['release_date']:
                     tracks_data.append({
@@ -176,12 +180,9 @@ def load_spotify_tracks(api_id, api_secret, playlist_url):
         return tracks_data
     except: return []
 
-# ⚡ Fix #1: Cache Kulcs Javítás (Nincs API kulcs a paraméterekben)
 @st.cache_data(ttl=86400, show_spinner=False)
 def fix_card_with_groq_cached(artist, title, original_year):
-    # A kulcsot belülről szerezzük meg, így nem része a cache hash-nek
     api_key = st.secrets.get("GROQ_KEY") or st.session_state.get("manual_groq_key")
-    
     if not api_key or Groq is None: return original_year
     try:
         client = Groq(api_key=api_key)
@@ -233,12 +234,16 @@ st.markdown("""
     .mob-card-box img { width: 50px; height: 50px; border-radius: 5px; }
     .tv-status { padding: 20px; border-radius: 15px; text-align: center; font-size: 1.5em; font-weight: bold; margin: 20px 0; background: rgba(0,0,0,0.5); border: 2px solid #555; animation: pulse 2s infinite; }
     @keyframes pulse { 0% {border-color: #555;} 50% {border-color: #00d4ff;} 100% {border-color: #555;} }
-    .trivia-box { background: rgba(255, 255, 0, 0.1); border-left: 5px solid yellow; padding: 15px; margin-top: 20px; font-style: italic; font-size: 1.2em; }
+    .trivia-box { background: rgba(255, 255, 0, 0.1); border-left: 5px solid yellow; padding: 15px; margin-top: 20px; font-style: italic; font-size: 1.2em; animation: popIn 1s ease-out; }
+    @keyframes popIn { 0% { transform: scale(0.8); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
     .player-tag { background: #444; padding: 5px 10px; margin: 2px; border-radius: 15px; display: inline-block; font-size: 0.9em; border: 1px solid #777; }
 </style>
 """, unsafe_allow_html=True)
 
 def play_sound_if_needed(state):
+    # Csak akkor szól, ha engedélyezték
+    if not st.session_state.get('sound_enabled', False): return False
+
     if state.get('sound_trigger') and not state.get('sound_played'):
         sounds = {
             "success": "https://www.myinstants.com/media/sounds/correct.mp3",
@@ -248,30 +253,25 @@ def play_sound_if_needed(state):
         }
         url = sounds.get(state['sound_trigger'])
         if url:
-            # iOS fallback hozzáadva
-            st.markdown(f'<audio autoplay muted playsinline><source src="{url}" type="audio/mpeg"></audio>', unsafe_allow_html=True)
+            st.markdown(f'<audio autoplay playsinline><source src="{url}" type="audio/mpeg"></audio>', unsafe_allow_html=True)
             return True
     return False
 
-# --- 5. LOGIKA ---
+# --- 5. APP FLOW ---
 if 'refresher' not in st.session_state: st.session_state.refresher = 0
 if not os.path.exists(DB_FILE): init_db()
 state = load_state()
 
-# SECRETS kezelés
+# Secrets
 default_id = st.secrets.get("SPOTIFY_ID", "")
 default_secret = st.secrets.get("SPOTIFY_SECRET", "")
 default_groq = st.secrets.get("GROQ_KEY", "")
-
-# Ha nincs secret, akkor a session state-ből olvassuk a manuálisat
-if default_groq:
-    st.session_state.manual_groq_key = default_groq
+if default_groq: st.session_state.manual_groq_key = default_groq
 
 with st.sidebar:
     st.title("🎛️ MENÜ")
-    role_selection = st.radio("Ki vagy te?", ["📺 TV (Kijelző)", "📱 Játékos (Telefon)"], 
-                              index=0 if st.session_state.user_role == "tv" else 1)
-    
+    role_idx = 0 if st.session_state.user_role == "tv" else 1
+    role_selection = st.radio("Ki vagy te?", ["📺 TV (Kijelző)", "📱 Játékos (Telefon)"], index=role_idx)
     new_role = "tv" if "TV" in role_selection else "player"
     if new_role != st.session_state.user_role:
         st.session_state.user_role = new_role
@@ -281,8 +281,6 @@ with st.sidebar:
 
     if st.session_state.user_role == "tv":
         st.header("⚙️ Beállítások")
-        
-        # JÁTÉKOS HOZZÁADÁSA
         if state['game_phase'] == "LOBBY":
             st.subheader("👥 Játékosok")
             new_p = st.text_input("Játékos neve:", key="new_player_input")
@@ -292,7 +290,7 @@ with st.sidebar:
                 elif new_p in state['players']: st.error("Foglalt név!")
                 else:
                     state['players'].append(new_p)
-                    save_state(state)
+                    save_state(state) # Bump version
                     st.success(f"{new_p} hozzáadva!")
                     st.rerun()
             if state['players']:
@@ -305,23 +303,32 @@ with st.sidebar:
                     st.rerun()
             st.divider()
 
-        api_id = st.text_input("Spotify ID", value=default_id, type="password")
-        api_secret = st.text_input("Spotify Secret", value=default_secret, type="password")
-        groq_key_input = st.text_input("Groq Key", value=default_groq, type="password")
-        
-        # Mentjük a manuális kulcsot a sessionbe, hogy a cache elérje
-        if groq_key_input: st.session_state.manual_groq_key = groq_key_input
+        # Ha nincs secrets, manuális mezők jelennek meg
+        if not default_id:
+            api_id = st.text_input("Spotify ID", type="password")
+            api_secret = st.text_input("Spotify Secret", type="password")
+            groq_key = st.text_input("Groq Key", type="password")
+            if groq_key: st.session_state.manual_groq_key = groq_key
+        else:
+            api_id = default_id
+            api_secret = default_secret
         
         pl_url = st.text_input("Playlist URL", value="https://open.spotify.com/playlist/37i9dQZF1DXbTxeAdrVG2l")
         target_score = st.number_input("🏆 Cél:", min_value=1, value=10)
+        song_limit_val = st.slider("Max dalok száma:", 10, 200, 80)
         
+        if st.checkbox("🔊 Hangok engedélyezése", value=st.session_state.sound_enabled):
+            st.session_state.sound_enabled = True
+        else:
+            st.session_state.sound_enabled = False
+
         if state['game_phase'] == "LOBBY":
             if st.button("🚀 JÁTÉK START", type="primary", disabled=len(state['players']) == 0):
                 if api_id and api_secret and pl_url:
                     with st.spinner("Zene betöltése..."):
-                        deck = load_spotify_tracks(api_id, api_secret, pl_url)
+                        deck = load_spotify_tracks(pl_url, limit=song_limit_val)
                         if not deck:
-                            st.error("❌ HIBA: Nem sikerült betölteni a zenéket!")
+                            st.error("❌ HIBA: Nem sikerült betölteni a zenéket! Ellenőrizd a secrets.toml fájlt!")
                         else:
                             random.shuffle(deck)
                             current_players = state['players']
@@ -342,18 +349,19 @@ with st.sidebar:
                                 "reveal_ui_shown": False,
                                 "winner": None,
                                 "target_score": target_score,
-                                "correct_answer_log": None,
+                                "last_revealed_song": None,
                                 "sound_trigger": None,
                                 "sound_played": False
                             }
+                            # Osztás
                             for p in new_state['players']:
                                 if new_state['deck']:
                                     c = new_state['deck'].pop()
-                                    c = process_card_ai(c) # Cache-elt hívás
+                                    if groq_key or default_groq: c = process_card_ai(c)
                                     new_state['timelines'][p].append(c)
                             if new_state['deck']:
                                 first = new_state['deck'].pop()
-                                first = process_card_ai(first)
+                                if groq_key or default_groq: first = process_card_ai(first)
                                 new_state['current_mystery_song'] = first
                             
                             save_state(new_state)
@@ -371,17 +379,14 @@ if st.session_state.user_role == "tv":
 
     if play_sound_if_needed(state):
         state['sound_played'] = True
-        save_state(state)
+        save_state(state, bump_version=False)
 
     if state.get('game_phase') == "LOBBY":
         st.info("👈 Állítsd össze a csapatot!")
-        
-        # QR KÓD (Fix #3: URL Paraméter)
         c1, c2 = st.columns([2, 1])
         with c1:
             st.write("📲 **Csatlakozás QR kóddal:**")
-            # Megpróbáljuk kitalálni az URL-t, de input mező a legbiztosabb
-            base_url = st.text_input("Böngésző linkje (a QR kódhoz):", value="https://te-appod.streamlit.app")
+            base_url = st.text_input("Link (QR-hez):", value="https://te-appod.streamlit.app")
             if base_url:
                 qr_link = f"{base_url}?role=player"
                 qr = qrcode.make(qr_link)
@@ -417,20 +422,22 @@ if st.session_state.user_role == "tv":
             @st.fragment(run_every=1)
             def auto_reveal_watcher():
                 current_state = load_state()
-                # 🔒 ATOMIC LOCK & UI CHECK (Fix #4)
                 if current_state.get('waiting_for_reveal') and not current_state.get('reveal_processed'):
                     
                     if not current_state.get('reveal_ui_shown'):
                         st.success("✅ TIPP ÉRKEZETT! KIÉRTÉKELÉS...")
-                        current_state['reveal_ui_shown'] = True # Csak egyszer mutatjuk
-                        save_state(current_state)
+                        current_state['reveal_ui_shown'] = True 
+                        save_state(current_state, bump_version=False)
                     
-                    # LOGIKA ÉS LOCK
                     current_state['reveal_processed'] = True
                     current_state['game_phase'] = "REVEAL"
                     current_state['waiting_for_reveal'] = False
                     
-                    current_state['fun_fact'] = get_fun_fact_cached(current_state['current_mystery_song']['artist'], current_state['current_mystery_song']['title'])
+                    current_state['last_revealed_song'] = current_state['current_mystery_song']
+                    
+                    groq_k = st.secrets.get("GROQ_KEY") or st.session_state.get("manual_groq_key")
+                    if groq_k:
+                        current_state['fun_fact'] = get_fun_fact_cached(current_state['current_mystery_song']['artist'], current_state['current_mystery_song']['title'])
                     
                     curr_p_name = current_state['players'][current_state['turn_index'] % len(current_state['players'])]
                     
@@ -467,7 +474,7 @@ if st.session_state.user_role == "tv":
                         st.markdown(f"<div class='timeline-card'><img src='{card.get('image', '')}'><div class='card-content'><div class='card-year'>{card['year']}</div><div class='card-title'>{card['title']}</div></div></div>", unsafe_allow_html=True)
 
     elif state.get('game_phase') == "REVEAL":
-        song = state['current_mystery_song']
+        song = state.get('last_revealed_song') or state['current_mystery_song']
         color = "#00ff00" if state['success'] else "#ff4b4b"
         msg = "TALÁLT! 🎉" if state['success'] else "NEM TALÁLT... 😢"
         
@@ -494,15 +501,16 @@ if st.session_state.user_role == "tv":
             state['turn_index'] += 1
             if state['deck']:
                 next_song = state['deck'].pop()
-                next_song = process_card_ai(next_song)
+                groq_k = st.secrets.get("GROQ_KEY") or st.session_state.get("manual_groq_key")
+                if groq_k: next_song = process_card_ai(next_song)
                 state['current_mystery_song'] = next_song
                 state['game_phase'] = "GUESSING"
                 state['fun_fact'] = ""
-                state['correct_answer_log'] = None
+                state['last_revealed_song'] = None
                 state['sound_trigger'] = None
                 state['sound_played'] = False
                 state['reveal_processed'] = False
-                state['reveal_ui_shown'] = False # Reset flag
+                state['reveal_ui_shown'] = False
             else: state['game_phase'] = "GAME_OVER"
             save_state(state)
             st.rerun()
@@ -526,7 +534,7 @@ elif st.session_state.user_role == "player":
     if 'my_name' not in st.session_state:
         players_list = state.get('players', [])
         if not players_list:
-            st.warning("Még nincsenek játékosok! Add hozzá őket a TV-n.")
+            st.warning("Még nincsenek játékosok!")
             if st.button("Frissítés"): st.rerun()
         else:
             selected_player = st.selectbox("Ki vagy te?", players_list)
@@ -540,9 +548,11 @@ elif st.session_state.user_role == "player":
         
         if st.button("🔄 Frissítés", use_container_width=True): st.rerun()
 
-        # 🔒 OPTIMISTIC LOCKING BETÖLTÉS (Fix #2)
         state = load_state()
-        local_version = state.get('version', 0)
+        
+        # Lokális verzió szinkronizálása, ha a szerver előrébb jár (passive sync)
+        if state.get('version', 0) > st.session_state.local_version:
+            st.session_state.local_version = state.get('version', 0)
 
         if state.get('game_phase') == "GUESSING":
             curr_p = state['players'][state['turn_index'] % len(state['players'])]
@@ -553,34 +563,41 @@ elif st.session_state.user_role == "player":
                     st.info("Nézd a TV-t!")
                 else:
                     st.success("🔴 TE JÖSSZ!")
-                    timeline = state['timelines'][me]
+                    # STALE DATA védelem: mindig friss timeline
+                    fresh_timeline = state['timelines'][me]
                     
                     def try_save_guess(pos):
-                        # Újratöltés mentés előtt ellenőrzéshez
+                        # Optimistic Lock Check: Újratöltjük a DB-t
                         fresh_state = load_state()
-                        if fresh_state.get('version', 0) != local_version:
-                            st.toast("⚠️ A játék állapota frissült, próbáld újra!")
+                        
+                        if fresh_state.get('version', 0) != st.session_state.local_version:
+                            st.toast("⚠️ Állapot frissült, próbáld újra!")
                             time.sleep(1)
                             st.rerun()
                             return
 
                         song = fresh_state['current_mystery_song']
-                        already_in = any(c['spotify_id'] == song['spotify_id'] for c in timeline)
+                        already_in = any(c['spotify_id'] == song['spotify_id'] for c in fresh_timeline)
                         
                         if not already_in:
-                            fresh_state['success'] = check_guess_logic(timeline, song, pos)
-                            fresh_state['correct_answer_log'] = song
-                            if fresh_state['success']: fresh_state['timelines'][me].insert(pos, song)
+                            fresh_state['success'] = check_guess_logic(fresh_state['timelines'][me], song, pos)
+                            fresh_state['last_revealed_song'] = song
+                            
+                            if fresh_state['success']: 
+                                fresh_state['timelines'][me].insert(pos, song)
                             
                             fresh_state['waiting_for_reveal'] = True
                             fresh_state['reveal_processed'] = False
+                            
+                            # SIKERES MENTÉS UTÁN FRISSÍTJÜK A LOKÁLIS VERZIÓT
                             save_state(fresh_state)
+                            st.session_state.local_version = fresh_state.get('version')
                             st.rerun()
 
                     if st.button("⬇️ IDE (Elejére) ⬇️", key="mob_btn_start", use_container_width=True):
                         try_save_guess(0)
 
-                    for i, card in enumerate(timeline):
+                    for i, card in enumerate(fresh_timeline):
                         st.markdown(f"<div class='mob-card-box'><img src='{card.get('image', '')}'><div><div style='font-weight:bold; font-size:1.2em'>{card['year']}</div><div>{card['title']}</div></div></div>", unsafe_allow_html=True)
                         if st.button(f"⬇️ IDE ⬇️", key=f"mob_btn_{i+1}", use_container_width=True):
                             try_save_guess(i + 1)
@@ -588,7 +605,7 @@ elif st.session_state.user_role == "player":
                 st.warning(f"Most {curr_p} gondolkodik...")
                 
         elif state.get('game_phase') == "REVEAL":
-            song = state.get('correct_answer_log') or state['current_mystery_song']
+            song = state.get('last_revealed_song') or state['current_mystery_song']
             color = "green" if state['success'] else "red"
             msg = "TALÁLT!" if state['success'] else "NEM TALÁLT..."
             st.markdown(f"<h2 style='text-align:center; color:{color};'>{msg}</h2>", unsafe_allow_html=True)

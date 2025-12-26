@@ -286,4 +286,69 @@ if st.session_state.game_started:
                                 prev_ok = (i==0) or (timeline[i-1]['year'] <= song['year'])
                                 next_ok = (i==len(timeline)) or (timeline[i]['year'] >= song['year'])
                                 st.session_state.success = (prev_ok and next_ok)
-                                st.session_state.
+                                st.session_state.game_msg = f"TALÁLT! ({song['year']})" if st.session_state.success else f"NEM... ({song['year']})"
+                                if st.session_state.success: st.session_state.timelines[curr_p].insert(i, song)
+                                st.session_state.game_phase = "REVEAL"
+                                st.rerun()
+                        col_idx += 1
+                
+                # KÁRTYA
+                if i < row_end:
+                    if col_idx < len(row_cols):
+                        with row_cols[col_idx]:
+                            card = timeline[i]
+                            # Csillag jelzés, ha AI javította
+                            ai_badge = "<span class='ai-badge'>✨</span>" if card.get('fixed_by_ai') else ""
+                            st.markdown(f"""
+                            <div class='timeline-card'>
+                                <div class='card-year'>{card['year']}{ai_badge}</div>
+                                <div class='card-title'>{card['title']}</div>
+                                <div class='card-artist'>{card['artist']}</div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                        col_idx += 1
+            st.markdown("<br>", unsafe_allow_html=True)
+
+    elif st.session_state.game_phase == "REVEAL":
+        if st.session_state.success: st.balloons()
+        
+        def next_turn():
+            st.session_state.turn_index += 1
+            if st.session_state.deck:
+                next_song = st.session_state.deck.pop()
+                # AI Elemzés (Következő körhöz)
+                if st.session_state.get('gemini_key'):
+                    fix_card_with_ai(next_song, st.session_state.gemini_key)
+                st.session_state.current_mystery_song = next_song
+                st.session_state.game_phase = "GUESSING"
+            else:
+                st.session_state.game_phase = "GAME_OVER"
+
+        c1, c2, c3 = st.columns([1,1,1])
+        c2.button("KÖVETKEZŐ ➡️", on_click=next_turn, type="primary", use_container_width=True)
+        
+        # Reveal nézet (csak kártyák)
+        timeline = st.session_state.timelines[curr_p]
+        CARDS_PER_ROW = 5
+        for row_start in range(0, len(timeline), CARDS_PER_ROW):
+            row_cards = timeline[row_start : row_start + CARDS_PER_ROW]
+            cols = st.columns(len(row_cards))
+            for idx, card in enumerate(row_cards):
+                is_new = (card == st.session_state.current_mystery_song and st.session_state.success)
+                style = "border: 3px solid #ffd166; transform: scale(1.05);" if is_new else ""
+                ai_badge = "<span class='ai-badge'>✨</span>" if card.get('fixed_by_ai') else ""
+                cols[idx].markdown(f"""
+                <div class='timeline-card' style='{style}'>
+                    <div class='card-year'>{card['year']}{ai_badge}</div>
+                    <div class='card-title'>{card['title']}</div>
+                </div>
+                """, unsafe_allow_html=True)
+            st.markdown("<br>", unsafe_allow_html=True)
+
+    elif st.session_state.game_phase == "GAME_OVER":
+        st.title("JÁTÉK VÉGE!")
+        if st.button("Újra"): st.session_state.clear(); st.rerun()
+
+else:
+    st.title("📺 Hitster Party")
+    st.info("Nyisd ki a menüt a kezdéshez! (> gomb bal fent)")

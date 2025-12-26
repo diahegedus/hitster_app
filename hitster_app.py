@@ -97,77 +97,50 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 4. OKOS AI LOGIKA (AUTOMATIKUS MODELL KERESÉS) ---
+# --- 4. OKOS AI LOGIKA (FAILSAFE) ---
 def log_ai(message):
     timestamp = time.strftime("%H:%M:%S")
     st.session_state.ai_logs.insert(0, f"[{timestamp}] {message}")
 
-def find_working_model():
-    """Végignézi az elérhető modelleket és visszaadja az első működőt."""
-    try:
-        available_models = []
-        # Lekérdezzük a listát a Google-tól
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                if 'gemini' in m.name:
-                    available_models.append(m.name)
-        
-        if not available_models:
-            log_ai("❌ Nem találtam Gemini modellt a listában.")
-            return None
-            
-        # Visszaadjuk az elsőt (pl. models/gemini-pro vagy models/gemini-1.5-flash)
-        log_ai(f"✅ Talált modell: {available_models[0]}")
-        return available_models[0]
-        
-    except Exception as e:
-        log_ai(f"⚠️ Modell keresési hiba: {str(e)}")
-        # Ha minden kötél szakad, visszaadunk egy alapértelmezettet
-        return 'models/gemini-pro'
-
 def fix_card_with_ai(card, api_key):
     if not api_key: 
-        log_ai("⚠️ Nincs API kulcs")
         return card
     
-    try:
-        genai.configure(api_key=api_key)
-        
-        # Dinamikusan keressük meg a modellt
-        model_name = find_working_model()
-        if not model_name:
-            return card # Ha nincs modell, nem tudunk mit tenni
+    genai.configure(api_key=api_key)
+    
+    # Kézzel definiált lista - ezeket próbáljuk sorban
+    # Nem használjuk a list_models()-t, mert az is hibát dobhat
+    models_to_try = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro', 'gemini-1.0-pro']
+    
+    prompt = f"""
+    Fact Check: What is the ORIGINAL single/album release year of "{card['title']}" by "{card['artist']}"?
+    - Reply with ONLY the 4-digit year. Example: 1980
+    """
+
+    for model_name in models_to_try:
+        try:
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(prompt)
+            text = response.text.strip()
             
-        model = genai.GenerativeModel(model_name)
-        
-        prompt = f"""
-        Fact Check: What is the ORIGINAL single/album release year of "{card['title']}" by "{card['artist']}"?
-        - Ignore Remasters, Greatest Hits, Re-issues.
-        - I need the very first year the public heard this song.
-        - Reply with ONLY the 4-digit year. Example: 1980
-        """
-        
-        response = model.generate_content(prompt)
-        text = response.text.strip()
-        
-        if text.isdigit():
-            ai_year = int(text)
-            orig_year = card['year']
-            
-            log_ai(f"Analízis: {card['title']} -> {ai_year} (Spotify: {orig_year})")
-            
-            if 1900 < ai_year <= 2025:
-                if ai_year != orig_year:
-                    if abs(ai_year - orig_year) > 0:
+            if text.isdigit():
+                ai_year = int(text)
+                orig_year = card['year']
+                log_ai(f"✅ Siker ({model_name}): {card['title']} -> {ai_year}")
+                
+                if 1900 < ai_year <= 2025:
+                    if ai_year != orig_year and abs(ai_year - orig_year) > 0:
                         card['year'] = ai_year
                         card['fixed_by_ai'] = True
-                        st.toast(f"AI: {card['title']} javítva ({orig_year} -> {ai_year})", icon="🤖")
-        else:
-            log_ai(f"❌ AI válasz nem szám: '{text}'")
+                        st.toast(f"AI javította: {orig_year} -> {ai_year}", icon="🤖")
+                return card # Ha sikerült, kilépünk
             
-    except Exception as e:
-        log_ai(f"🔥 AI Hiba: {str(e)}")
-        
+        except Exception:
+            # Ha ez a modell nem megy, csendben próbáljuk a következőt
+            continue
+            
+    # Ha egyik sem sikerült
+    log_ai(f"⚠️ Egyik AI modell sem válaszolt a dalra: {card['title']}")
     return card
 
 def load_spotify_tracks(spotify_id, spotify_secret, playlist_url):
@@ -205,7 +178,7 @@ def load_spotify_tracks(spotify_id, spotify_secret, playlist_url):
             return []
         return tracks_data
     except Exception as e:
-        st.error(f"Hiba: {e}")
+        st.error(f"Spotify Hiba: {e}")
         return []
 
 def add_player_callback():
@@ -238,22 +211,6 @@ with st.sidebar:
     st.markdown("### 🧠 AI és Diagnosztika")
     gemini_key_input = st.text_input("Gemini API Key", type="password")
     
-    # TESZT GOMB
-    if st.button("🛠️ AI Teszt (Kattints ide!)"):
-        if not gemini_key_input:
-            st.error("Előbb írd be a kulcsot!")
-        else:
-            with st.spinner("Modell keresése és tesztelés..."):
-                try:
-                    test_card = {"title": "Upside Down", "artist": "Diana Ross", "year": 2017}
-                    res = fix_card_with_ai(test_card, gemini_key_input)
-                    if res['year'] == 1980:
-                        st.success("✅ SIKER! Az AI működik és javít.")
-                    else:
-                        st.error(f"❌ Az AI válaszolt ({res['year']}), de nem javított. Nézd a logot!")
-                except Exception as e:
-                     st.error(f"Teszt hiba: {e}")
-
     st.markdown("<b>AI Napló:</b>", unsafe_allow_html=True)
     log_content = "<br>".join(st.session_state.ai_logs)
     st.markdown(f"<div class='log-box'>{log_content}</div>", unsafe_allow_html=True)
@@ -319,28 +276,22 @@ if st.session_state.game_started:
         
         timeline = st.session_state.timelines[curr_p]
         
-        # --- VÉGLEGES RÁCS ALGORITMUS (NINCS DUPLIKÁCIÓ) ---
+        # --- GRID RENDER ---
         CARDS_PER_ROW = 4
         
-        # 1. ITERÁLUNK A KÁRTYÁKON (SORONKÉNT)
         for row_start in range(0, len(timeline), CARDS_PER_ROW):
             row_end = min(row_start + CARDS_PER_ROW, len(timeline))
             
-            # Építjük az elemek listáját a sorhoz
             elements = []
-            
-            # Minden kártya elé kell egy gomb
             for i in range(row_start, row_end):
                 elements.append({"type": "btn", "index": i})
                 elements.append({"type": "card", "index": i})
             
-            # Ha ez az UTOLSÓ sor, és vége a listának, akkor kell egy ZÁRÓ gomb is
+            # Utolsó záró gomb
             if row_end == len(timeline):
                  elements.append({"type": "btn", "index": row_end})
 
-            # Megjelenítés
             if elements:
-                # Oszlop szélességek: Gomb=1, Kártya=4
                 cols = st.columns([1 if e["type"]=="btn" else 4 for e in elements])
                 
                 for idx, el in enumerate(elements):
@@ -348,10 +299,12 @@ if st.session_state.game_started:
                         i = el["index"]
                         if el["type"] == "btn":
                             st.markdown("<br>", unsafe_allow_html=True)
-                            if st.button("➕", key=f"btn_{i}", use_container_width=True):
+                            # FONTOS: Itt tesszük bele a játékos nevét a kulcsba!
+                            # key = btn_JatekosNeve_0
+                            unique_key = f"btn_{curr_p}_{i}"
+                            
+                            if st.button("➕", key=unique_key, use_container_width=True):
                                 song = st.session_state.current_mystery_song
-                                # Ellenőrzés: i a beszúrási pont.
-                                # timeline[i-1] <= song <= timeline[i]
                                 prev_ok = (i==0) or (timeline[i-1]['year'] <= song['year'])
                                 next_ok = (i==len(timeline)) or (timeline[i]['year'] >= song['year'])
                                 st.session_state.success = (prev_ok and next_ok)
@@ -360,7 +313,6 @@ if st.session_state.game_started:
                                 st.session_state.game_phase = "REVEAL"
                                 st.rerun()
                         else:
-                            # Kártya
                             card = timeline[i]
                             ai_badge = "<span class='ai-badge'>✨</span>" if card.get('fixed_by_ai') else ""
                             st.markdown(f"""

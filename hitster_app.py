@@ -17,8 +17,6 @@ if "role" in st.query_params:
 
 if 'user_role' not in st.session_state: st.session_state.user_role = "tv"
 if 'sound_enabled' not in st.session_state: st.session_state.sound_enabled = False
-# Session szintű verziókövetés a stabil player élményért
-if 'local_version' not in st.session_state: st.session_state.local_version = 0
 
 # --- ALAPOK ---
 try:
@@ -87,7 +85,7 @@ def reset_db():
             "winner": None,
             "target_score": 10,
             "last_revealed_song": None,
-            "sound_trigger": None, # 🧹 Explicit cleanup
+            "sound_trigger": None,
             "sound_played": False
         }
         c.execute("UPDATE game_state SET data = ? WHERE id = 1", (json.dumps(new_state),))
@@ -127,17 +125,14 @@ def check_guess_logic(timeline, song, pos):
     next_card = timeline[pos]
     return (prev_card['year'] <= song['year']) and (next_card['year'] >= song['year'])
 
-# --- 3. SPOTIFY & AI (CACHE OPTIMALIZÁLT) ---
-@st.cache_data(ttl=3600, show_spinner=False)
-def load_spotify_tracks(playlist_url, limit=80):
-    # API kulcsok belső feloldása (Cache-barát)
-    api_id = st.secrets.get("SPOTIFY_ID")
-    api_secret = st.secrets.get("SPOTIFY_SECRET")
-    
-    if not api_id or not api_secret: return []
+# --- 3. SPOTIFY & AI (PARAMÉTEREZHETŐ CACHE ⚡) ---
+# Visszatettük a paramétereket (_prefix-szel), hogy a UI-ról kapott kulcsokkal is működjön.
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_spotify_tracks(_api_id, _api_secret, playlist_url, limit=80):
+    if not _api_id or not _api_secret: return []
     try:
-        auth_manager = SpotifyClientCredentials(client_id=api_id, client_secret=api_secret)
+        auth_manager = SpotifyClientCredentials(client_id=_api_id, client_secret=_api_secret)
         sp = spotipy.Spotify(auth_manager=auth_manager)
         if "?" in playlist_url: clean_url = playlist_url.split("?")[0]
         else: clean_url = playlist_url
@@ -181,11 +176,10 @@ def load_spotify_tracks(playlist_url, limit=80):
     except: return []
 
 @st.cache_data(ttl=86400, show_spinner=False)
-def fix_card_with_groq_cached(artist, title, original_year):
-    api_key = st.secrets.get("GROQ_KEY") or st.session_state.get("manual_groq_key")
-    if not api_key or Groq is None: return original_year
+def fix_card_with_groq_cached(artist, title, original_year, _api_key):
+    if not _api_key or Groq is None: return original_year
     try:
-        client = Groq(api_key=api_key)
+        client = Groq(api_key=_api_key)
         prompt = f"Fact Check: ORIGINAL release year of '{title}' by '{artist}'? Reply ONLY 4-digit year."
         completion = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}], temperature=0, max_tokens=10)
         text = completion.choices[0].message.content.strip()
@@ -195,19 +189,19 @@ def fix_card_with_groq_cached(artist, title, original_year):
     except: pass
     return original_year
 
-def process_card_ai(card):
-    new_year = fix_card_with_groq_cached(card['artist'], card['title'], card['year'])
+def process_card_ai(card, api_key):
+    if not api_key: return card
+    new_year = fix_card_with_groq_cached(card['artist'], card['title'], card['year'], _api_key=api_key)
     if new_year != card['year']:
         card['year'] = new_year
         card['fixed_by_ai'] = True
     return card
 
 @st.cache_data(ttl=86400, show_spinner=False)
-def get_fun_fact_cached(artist, title):
-    api_key = st.secrets.get("GROQ_KEY") or st.session_state.get("manual_groq_key")
-    if not api_key or Groq is None: return "Jó kis zene!"
+def get_fun_fact_cached(artist, title, _api_key):
+    if not _api_key or Groq is None: return "Jó kis zene!"
     try:
-        client = Groq(api_key=api_key)
+        client = Groq(api_key=_api_key)
         prompt = f"Tell me a very short (max 1 sentence), interesting trivia fact about the song '{title}' by '{artist}' in HUNGARIAN language. Don't mention the release year."
         completion = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}], temperature=0.7, max_tokens=100)
         return completion.choices[0].message.content.strip()
@@ -241,9 +235,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 def play_sound_if_needed(state):
-    # Csak akkor szól, ha engedélyezték
     if not st.session_state.get('sound_enabled', False): return False
-
     if state.get('sound_trigger') and not state.get('sound_played'):
         sounds = {
             "success": "https://www.myinstants.com/media/sounds/correct.mp3",
@@ -262,11 +254,10 @@ if 'refresher' not in st.session_state: st.session_state.refresher = 0
 if not os.path.exists(DB_FILE): init_db()
 state = load_state()
 
-# Secrets
+# Secrets betöltése alapértelmezettnek (ha van)
 default_id = st.secrets.get("SPOTIFY_ID", "")
 default_secret = st.secrets.get("SPOTIFY_SECRET", "")
 default_groq = st.secrets.get("GROQ_KEY", "")
-if default_groq: st.session_state.manual_groq_key = default_groq
 
 with st.sidebar:
     st.title("🎛️ MENÜ")
@@ -290,7 +281,7 @@ with st.sidebar:
                 elif new_p in state['players']: st.error("Foglalt név!")
                 else:
                     state['players'].append(new_p)
-                    save_state(state) # Bump version
+                    save_state(state) 
                     st.success(f"{new_p} hozzáadva!")
                     st.rerun()
             if state['players']:
@@ -303,15 +294,13 @@ with st.sidebar:
                     st.rerun()
             st.divider()
 
-        # Ha nincs secrets, manuális mezők jelennek meg
-        if not default_id:
-            api_id = st.text_input("Spotify ID", type="password")
-            api_secret = st.text_input("Spotify Secret", type="password")
-            groq_key = st.text_input("Groq Key", type="password")
-            if groq_key: st.session_state.manual_groq_key = groq_key
-        else:
-            api_id = default_id
-            api_secret = default_secret
+        # VISSZAKERÜLTEK AZ INPUT MEZŐK (Alapértékként a secrets-et használva)
+        api_id = st.text_input("Spotify ID", value=default_id, type="password")
+        api_secret = st.text_input("Spotify Secret", value=default_secret, type="password")
+        groq_key = st.text_input("Groq Key", value=default_groq, type="password")
+        
+        # Sessionbe is elmentjük, hogy a refresh-nél meglegyen
+        if groq_key: st.session_state.manual_groq_key = groq_key
         
         pl_url = st.text_input("Playlist URL", value="https://open.spotify.com/playlist/37i9dQZF1DXbTxeAdrVG2l")
         target_score = st.number_input("🏆 Cél:", min_value=1, value=10)
@@ -326,9 +315,10 @@ with st.sidebar:
             if st.button("🚀 JÁTÉK START", type="primary", disabled=len(state['players']) == 0):
                 if api_id and api_secret and pl_url:
                     with st.spinner("Zene betöltése..."):
-                        deck = load_spotify_tracks(pl_url, limit=song_limit_val)
+                        # ITT ADJUK ÁT MANUÁLISAN A KULCSOKAT
+                        deck = load_spotify_tracks(_api_id=api_id, _api_secret=api_secret, playlist_url=pl_url, limit=song_limit_val)
                         if not deck:
-                            st.error("❌ HIBA: Nem sikerült betölteni a zenéket! Ellenőrizd a secrets.toml fájlt!")
+                            st.error("❌ HIBA: Nem sikerült betölteni a zenéket! Ellenőrizd a kódokat!")
                         else:
                             random.shuffle(deck)
                             current_players = state['players']
@@ -357,11 +347,11 @@ with st.sidebar:
                             for p in new_state['players']:
                                 if new_state['deck']:
                                     c = new_state['deck'].pop()
-                                    if groq_key or default_groq: c = process_card_ai(c)
+                                    if groq_key: c = process_card_ai(c, groq_key)
                                     new_state['timelines'][p].append(c)
                             if new_state['deck']:
                                 first = new_state['deck'].pop()
-                                if groq_key or default_groq: first = process_card_ai(first)
+                                if groq_key: first = process_card_ai(first, groq_key)
                                 new_state['current_mystery_song'] = first
                             
                             save_state(new_state)
@@ -403,7 +393,6 @@ if st.session_state.user_role == "tv":
             curr_p = state['players'][state['turn_index'] % len(state['players'])]
             song = state['current_mystery_song']
             
-            # PONTOK
             cols = st.columns(len(state['players']))
             for i, p in enumerate(state['players']):
                 is_active = (p == curr_p)
@@ -418,7 +407,6 @@ if st.session_state.user_role == "tv":
             st.markdown(f"### 🎶 Most játszik: {song['artist']} - ???")
             st.components.v1.iframe(f"https://open.spotify.com/embed/track/{song['spotify_id']}", height=80)
             
-            # FRAGMENT WATCHDOG
             @st.fragment(run_every=1)
             def auto_reveal_watcher():
                 current_state = load_state()
@@ -435,9 +423,10 @@ if st.session_state.user_role == "tv":
                     
                     current_state['last_revealed_song'] = current_state['current_mystery_song']
                     
-                    groq_k = st.secrets.get("GROQ_KEY") or st.session_state.get("manual_groq_key")
+                    # Groq kulcs sessionből vagy secretsből
+                    groq_k = st.session_state.get("manual_groq_key") or st.secrets.get("GROQ_KEY")
                     if groq_k:
-                        current_state['fun_fact'] = get_fun_fact_cached(current_state['current_mystery_song']['artist'], current_state['current_mystery_song']['title'])
+                        current_state['fun_fact'] = get_fun_fact_cached(current_state['current_mystery_song']['artist'], current_state['current_mystery_song']['title'], _api_key=groq_k)
                     
                     curr_p_name = current_state['players'][current_state['turn_index'] % len(current_state['players'])]
                     
@@ -501,8 +490,8 @@ if st.session_state.user_role == "tv":
             state['turn_index'] += 1
             if state['deck']:
                 next_song = state['deck'].pop()
-                groq_k = st.secrets.get("GROQ_KEY") or st.session_state.get("manual_groq_key")
-                if groq_k: next_song = process_card_ai(next_song)
+                groq_k = st.session_state.get("manual_groq_key") or st.secrets.get("GROQ_KEY")
+                if groq_k: next_song = process_card_ai(next_song, groq_k)
                 state['current_mystery_song'] = next_song
                 state['game_phase'] = "GUESSING"
                 state['fun_fact'] = ""
@@ -534,7 +523,7 @@ elif st.session_state.user_role == "player":
     if 'my_name' not in st.session_state:
         players_list = state.get('players', [])
         if not players_list:
-            st.warning("Még nincsenek játékosok!")
+            st.warning("Még nincsenek játékosok! Add hozzá őket a TV-n.")
             if st.button("Frissítés"): st.rerun()
         else:
             selected_player = st.selectbox("Ki vagy te?", players_list)
@@ -549,10 +538,7 @@ elif st.session_state.user_role == "player":
         if st.button("🔄 Frissítés", use_container_width=True): st.rerun()
 
         state = load_state()
-        
-        # Lokális verzió szinkronizálása, ha a szerver előrébb jár (passive sync)
-        if state.get('version', 0) > st.session_state.local_version:
-            st.session_state.local_version = state.get('version', 0)
+        local_version = state.get('version', 0)
 
         if state.get('game_phase') == "GUESSING":
             curr_p = state['players'][state['turn_index'] % len(state['players'])]
@@ -563,14 +549,11 @@ elif st.session_state.user_role == "player":
                     st.info("Nézd a TV-t!")
                 else:
                     st.success("🔴 TE JÖSSZ!")
-                    # STALE DATA védelem: mindig friss timeline
                     fresh_timeline = state['timelines'][me]
                     
                     def try_save_guess(pos):
-                        # Optimistic Lock Check: Újratöltjük a DB-t
                         fresh_state = load_state()
-                        
-                        if fresh_state.get('version', 0) != st.session_state.local_version:
+                        if fresh_state.get('version', 0) != local_version:
                             st.toast("⚠️ Állapot frissült, próbáld újra!")
                             time.sleep(1)
                             st.rerun()
@@ -582,16 +565,11 @@ elif st.session_state.user_role == "player":
                         if not already_in:
                             fresh_state['success'] = check_guess_logic(fresh_state['timelines'][me], song, pos)
                             fresh_state['last_revealed_song'] = song
-                            
                             if fresh_state['success']: 
                                 fresh_state['timelines'][me].insert(pos, song)
-                            
                             fresh_state['waiting_for_reveal'] = True
                             fresh_state['reveal_processed'] = False
-                            
-                            # SIKERES MENTÉS UTÁN FRISSÍTJÜK A LOKÁLIS VERZIÓT
                             save_state(fresh_state)
-                            st.session_state.local_version = fresh_state.get('version')
                             st.rerun()
 
                     if st.button("⬇️ IDE (Elejére) ⬇️", key="mob_btn_start", use_container_width=True):

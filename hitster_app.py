@@ -9,7 +9,7 @@ import time
 if 'game_started' not in st.session_state:
     st.session_state.game_started = False
 if 'players' not in st.session_state:
-    st.session_state.players = [] # Üres lista induláskor
+    st.session_state.players = [] 
 
 # --- 2. KONFIGURÁCIÓ ---
 st.set_page_config(
@@ -88,7 +88,6 @@ st.markdown("""
     }
     .score-active { border-color: #00d4ff; background: rgba(0, 212, 255, 0.1); }
     
-    /* JÁTÉKOS LISTA STÍLUS AZ OLDALSÁVON */
     .player-tag {
         background: #444; padding: 5px 10px; margin: 2px; border-radius: 15px; display: inline-block; font-size: 0.9em;
     }
@@ -150,34 +149,28 @@ def load_spotify_tracks(spotify_id, spotify_secret, playlist_url):
         st.error(f"Hiba: {e}")
         return []
 
-# --- 5. JÁTÉKOSOK HOZZÁADÁSA FÜGGVÉNY ---
 def add_player_callback():
     name = st.session_state.new_player_name
     if name and name not in st.session_state.players:
         st.session_state.players.append(name)
-        st.session_state.new_player_name = "" # Input törlése
+        st.session_state.new_player_name = "" 
 
-# --- 6. OLDALSÁV ---
+# --- 5. OLDALSÁV ---
 with st.sidebar:
     st.title("👥 Játékosok")
-    
-    # Input mező callback-el (Enterre is működik)
     st.text_input("Írd be a nevet és nyomj Entert:", key="new_player_name", on_change=add_player_callback)
     
-    # Játékosok listázása
     if st.session_state.players:
         st.write("Csatlakoztak:")
         for p in st.session_state.players:
             st.markdown(f"<span class='player-tag'>👤 {p}</span>", unsafe_allow_html=True)
-            
         if st.button("🗑️ Lista törlése"):
             st.session_state.players = []
             st.rerun()
     else:
-        st.info("Még nincs játékos! Adj hozzá valakit.")
+        st.info("Adj hozzá valakit!")
 
     st.divider()
-    
     st.header("⚙️ Beállítások")
     api_id = st.text_input("Spotify ID", type="password")
     api_secret = st.text_input("Spotify Secret", type="password")
@@ -186,11 +179,8 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # Start gomb letiltva, ha nincs játékos
     if st.button("🚀 BULI INDÍTÁSA", type="primary", disabled=len(st.session_state.players) == 0):
-        if len(st.session_state.players) == 0:
-            st.error("Adj hozzá legalább egy játékost!")
-        elif api_id and api_secret and pl_url:
+        if len(st.session_state.players) > 0 and api_id and api_secret and pl_url:
             with st.spinner("Lemezek válogatása..."):
                 raw_deck = load_spotify_tracks(api_id, api_secret, pl_url)
                 if raw_deck:
@@ -198,7 +188,6 @@ with st.sidebar:
                     st.session_state.deck = raw_deck
                     st.session_state.gemini_key = gemini_key_input
                     st.session_state.timelines = {}
-                    
                     for p in st.session_state.players:
                         if not st.session_state.deck: break
                         card = st.session_state.deck.pop()
@@ -213,24 +202,19 @@ with st.sidebar:
                         st.session_state.game_phase = "GUESSING"
                         st.session_state.game_started = True
                         st.rerun()
-        else:
-            st.error("Add meg a Spotify adatokat!")
 
-# --- 7. FŐ APP ---
+# --- 6. FŐ APP ---
 if st.session_state.game_started:
     curr_p = st.session_state.players[st.session_state.turn_index % len(st.session_state.players)]
     
-    # --- HEADER ---
+    # HEADER
     st.markdown('<div class="mystery-sticky">', unsafe_allow_html=True)
-    
-    # Pontszámok
     c_scores = st.columns(len(st.session_state.players))
     for i, p in enumerate(st.session_state.players):
         active = "score-active" if p == curr_p else ""
         score = len(st.session_state.timelines.get(p, []))
         c_scores[i].markdown(f"<div class='score-box {active}'><b>{p}</b>: {score}</div>", unsafe_allow_html=True)
 
-    # Info Doboz
     if st.session_state.game_phase == "GUESSING":
         song = st.session_state.current_mystery_song
         st.markdown(f"""
@@ -242,10 +226,9 @@ if st.session_state.game_started:
     elif st.session_state.game_phase == "REVEAL":
         color = "#00ff00" if st.session_state.success else "#ff4b4b"
         st.markdown(f"<h2 style='text-align:center; color:{color}; margin:0;'>{st.session_state.game_msg}</h2>", unsafe_allow_html=True)
-        
     st.markdown('</div>', unsafe_allow_html=True) 
 
-    # --- JÁTÉKTÉR ---
+    # JÁTÉKTÉR
     if st.session_state.game_phase == "GUESSING":
         c1, c2, c3 = st.columns([1,2,1])
         with c2:
@@ -255,17 +238,21 @@ if st.session_state.game_started:
         
         timeline = st.session_state.timelines[curr_p]
         
-        # RÁCSOS ELRENDEZÉS
+        # --- JAVÍTOTT CIKLUS (Duplikációmentes) ---
         CARDS_PER_ROW = 4
-        for row_start in range(0, len(timeline) + 1, CARDS_PER_ROW):
+        # Fontos: A range nem mehet túl a listán, és nem szabad +1-et adni
+        for row_start in range(0, len(timeline), CARDS_PER_ROW):
             row_end = min(row_start + CARDS_PER_ROW, len(timeline))
             
             cols_in_row = []
             for i in range(row_start, row_end):
                 cols_in_row.append("btn")
                 cols_in_row.append("card")
+            
+            # Záró gomb csak akkor, ha ez az utolsó sor ÉS vége a teljes listának
             if row_end == len(timeline):
                 cols_in_row.append("btn")
+                
             if not cols_in_row: continue
 
             spec = [1 if x == "btn" else 4 for x in cols_in_row]
@@ -273,6 +260,7 @@ if st.session_state.game_started:
             
             col_idx = 0
             for i in range(row_start, row_end + 1):
+                # GOMB
                 if col_idx < len(row_cols) and cols_in_row[col_idx] == "btn":
                      with row_cols[col_idx]:
                         st.markdown("<br>", unsafe_allow_html=True)
@@ -287,6 +275,7 @@ if st.session_state.game_started:
                             st.rerun()
                      col_idx += 1
                 
+                # KÁRTYA
                 if i < row_end and col_idx < len(row_cols) and cols_in_row[col_idx] == "card":
                     with row_cols[col_idx]:
                         card = timeline[i]
@@ -341,4 +330,4 @@ if st.session_state.game_started:
 
 else:
     st.title("📺 Hitster Party")
-    st.info("Nyisd ki a menüt a kezdéshez! (> gomb bal fent)")
+    st.info("Add hozzá a játékosokat a bal oldali menüben!")

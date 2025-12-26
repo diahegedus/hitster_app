@@ -8,6 +8,8 @@ import time
 # --- 1. SESSION STATE ---
 if 'game_started' not in st.session_state:
     st.session_state.game_started = False
+if 'players' not in st.session_state:
+    st.session_state.players = [] # Üres lista induláskor
 
 # --- 2. KONFIGURÁCIÓ ---
 st.set_page_config(
@@ -17,7 +19,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed" if st.session_state.game_started else "expanded"
 )
 
-# --- 3. STÍLUS (RÁCSOS WRAPPING) 🎨 ---
+# --- 3. STÍLUS 🎨 ---
 st.markdown("""
 <style>
     .stApp {
@@ -42,16 +44,11 @@ st.markdown("""
     .timeline-card:hover { transform: scale(1.03); z-index: 10; }
     
     .card-year { 
-        font-size: 2em; 
-        font-weight: 900; 
-        border-bottom: 1px solid rgba(255,255,255,0.3); 
-        margin-bottom: 5px;
+        font-size: 2em; font-weight: 900; 
+        border-bottom: 1px solid rgba(255,255,255,0.3); margin-bottom: 5px;
         text-shadow: 1px 1px 2px black; 
     }
-    .ai-badge {
-        font-size: 0.4em; vertical-align: super; color: #ffff00;
-    }
-    
+    .ai-badge { font-size: 0.4em; vertical-align: super; color: #ffff00; }
     .card-title { font-weight: bold; font-size: 1.1em; line-height: 1.2; }
     .card-artist { font-size: 0.9em; opacity: 0.9; margin-bottom: 5px; }
 
@@ -90,42 +87,29 @@ st.markdown("""
         border-radius: 8px; text-align: center; border: 1px solid transparent;
     }
     .score-active { border-color: #00d4ff; background: rgba(0, 212, 255, 0.1); }
+    
+    /* JÁTÉKOS LISTA STÍLUS AZ OLDALSÁVON */
+    .player-tag {
+        background: #444; padding: 5px 10px; margin: 2px; border-radius: 15px; display: inline-block; font-size: 0.9em;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 4. OKOS AI LOGIKA (DEBUGGOLVA) ---
+# --- 4. LOGIKA ---
 def fix_card_with_ai(card, api_key):
-    """Kijavítja a dátumot, és visszajelzést ad."""
-    if not api_key: 
-        return card
-    
+    if not api_key: return card
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-pro')
-        
-        prompt = f"""
-        What is the ORIGINAL release year of the song "{card['title']}" by "{card['artist']}"?
-        Ignore Remastered, Best Of, or Compilation dates.
-        Return ONLY the 4-digit year (e.g. 1984). Nothing else.
-        """
-        
+        prompt = f"""What is the ORIGINAL release year of "{card['title']}" by "{card['artist']}"? Return ONLY the 4-digit year."""
         response = model.generate_content(prompt)
         text = response.text.strip()
-        
         if text.isdigit():
             ai_year = int(text)
-            original_year = card['year']
-            
-            if 1900 < ai_year <= 2025:
-                # HA az AI régebbit mond, MINT a Spotify -> JAVÍTUNK
-                # VAGY ha a Spotify nagyon új (pl 2020), de a dal egyértelműen régi
-                if ai_year < original_year:
-                    card['year'] = ai_year
-                    card['fixed_by_ai'] = True 
-    except Exception as e:
-        print(f"AI HIBA: {e}")
-        pass
-        
+            if 1900 < ai_year <= 2025 and ai_year < card['year']:
+                card['year'] = ai_year
+                card['fixed_by_ai'] = True 
+    except: pass
     return card
 
 def load_spotify_tracks(spotify_id, spotify_secret, playlist_url):
@@ -136,7 +120,6 @@ def load_spotify_tracks(spotify_id, spotify_secret, playlist_url):
         else: clean_url = playlist_url
         resource_id = clean_url.split("/")[-1]
         tracks_data = []
-        
         if "album" in clean_url:
             album_info = sp.album(resource_id)
             album_year = int(album_info['release_date'].split('-')[0])
@@ -167,28 +150,47 @@ def load_spotify_tracks(spotify_id, spotify_secret, playlist_url):
         st.error(f"Hiba: {e}")
         return []
 
-# --- 5. FŐ APP ---
-if 'players' not in st.session_state: st.session_state.players = ["Jorgosz", "Lilla", "Józsi", "Dia"]
+# --- 5. JÁTÉKOSOK HOZZÁADÁSA FÜGGVÉNY ---
+def add_player_callback():
+    name = st.session_state.new_player_name
+    if name and name not in st.session_state.players:
+        st.session_state.players.append(name)
+        st.session_state.new_player_name = "" # Input törlése
 
+# --- 6. OLDALSÁV ---
 with st.sidebar:
-    st.header("⚙️ DJ Pult")
+    st.title("👥 Játékosok")
+    
+    # Input mező callback-el (Enterre is működik)
+    st.text_input("Írd be a nevet és nyomj Entert:", key="new_player_name", on_change=add_player_callback)
+    
+    # Játékosok listázása
+    if st.session_state.players:
+        st.write("Csatlakoztak:")
+        for p in st.session_state.players:
+            st.markdown(f"<span class='player-tag'>👤 {p}</span>", unsafe_allow_html=True)
+            
+        if st.button("🗑️ Lista törlése"):
+            st.session_state.players = []
+            st.rerun()
+    else:
+        st.info("Még nincs játékos! Adj hozzá valakit.")
+
+    st.divider()
+    
+    st.header("⚙️ Beállítások")
     api_id = st.text_input("Spotify ID", type="password")
     api_secret = st.text_input("Spotify Secret", type="password")
     pl_url = st.text_input("Playlist Link", value="https://open.spotify.com/playlist/2WQxrq5bmHMlVuzvtwwywV?si=KGQWViY9QESfrZc21btFzA")
-    
-    st.markdown("---")
-    st.markdown("### 🧠 AI Beállítás")
-    gemini_key_input = st.text_input("Gemini API Key", type="password", help="Ha ezt megadod, az AI javítja a hibás évszámokat.")
-    
-    if gemini_key_input:
-        st.success("AI Kulcs megadva! ✅")
-    else:
-        st.warning("Nincs AI kulcs! A dátumok pontatlanok lehetnek (Spotify). ⚠️")
+    gemini_key_input = st.text_input("Gemini API (Opcionális)", type="password")
     
     st.markdown("---")
     
-    if st.button("🚀 BULI INDÍTÁSA", type="primary"):
-        if api_id and api_secret and pl_url:
+    # Start gomb letiltva, ha nincs játékos
+    if st.button("🚀 BULI INDÍTÁSA", type="primary", disabled=len(st.session_state.players) == 0):
+        if len(st.session_state.players) == 0:
+            st.error("Adj hozzá legalább egy játékost!")
+        elif api_id and api_secret and pl_url:
             with st.spinner("Lemezek válogatása..."):
                 raw_deck = load_spotify_tracks(api_id, api_secret, pl_url)
                 if raw_deck:
@@ -197,14 +199,12 @@ with st.sidebar:
                     st.session_state.gemini_key = gemini_key_input
                     st.session_state.timelines = {}
                     
-                    # Kezdő lapok kiosztása + AI Javítás
                     for p in st.session_state.players:
                         if not st.session_state.deck: break
                         card = st.session_state.deck.pop()
                         if gemini_key_input: fix_card_with_ai(card, gemini_key_input)
                         st.session_state.timelines[p] = [card]
                     
-                    # Első rejtélyes dal + AI Javítás
                     if st.session_state.deck:
                         first = st.session_state.deck.pop()
                         if gemini_key_input: fix_card_with_ai(first, gemini_key_input)
@@ -213,7 +213,10 @@ with st.sidebar:
                         st.session_state.game_phase = "GUESSING"
                         st.session_state.game_started = True
                         st.rerun()
+        else:
+            st.error("Add meg a Spotify adatokat!")
 
+# --- 7. FŐ APP ---
 if st.session_state.game_started:
     curr_p = st.session_state.players[st.session_state.turn_index % len(st.session_state.players)]
     
@@ -252,34 +255,24 @@ if st.session_state.game_started:
         
         timeline = st.session_state.timelines[curr_p]
         
-        # --- JAVÍTOTT RÁCSOS ELRENDEZÉS (DUPLIKÁCIÓK NÉLKÜL) ---
+        # RÁCSOS ELRENDEZÉS
         CARDS_PER_ROW = 4
-        # Csak a timeline hosszáig iterálunk
-        for row_start in range(0, len(timeline), CARDS_PER_ROW):
+        for row_start in range(0, len(timeline) + 1, CARDS_PER_ROW):
             row_end = min(row_start + CARDS_PER_ROW, len(timeline))
             
-            # Építjük a sort: minden kártya elé gomb, és a kártya maga
             cols_in_row = []
             for i in range(row_start, row_end):
                 cols_in_row.append("btn")
                 cols_in_row.append("card")
-            
-            # Ha ez az UTOLSÓ sor, és vége a timeline-nak, kell a záró gomb
             if row_end == len(timeline):
                 cols_in_row.append("btn")
-                
             if not cols_in_row: continue
 
-            # Oszlopok definíciója
             spec = [1 if x == "btn" else 4 for x in cols_in_row]
             row_cols = st.columns(spec)
             
             col_idx = 0
-            # Végigmegyünk a sor elemeien, de figyelünk a záró gombra is
             for i in range(row_start, row_end + 1):
-                
-                # GOMB RENDERELÉS (Ha i <= len(timeline), tehát van még hely)
-                # De csak akkor rakjuk ki a gombot, ha még "fér" a sorba (col_idx)
                 if col_idx < len(row_cols) and cols_in_row[col_idx] == "btn":
                      with row_cols[col_idx]:
                         st.markdown("<br>", unsafe_allow_html=True)
@@ -294,7 +287,6 @@ if st.session_state.game_started:
                             st.rerun()
                      col_idx += 1
                 
-                # KÁRTYA RENDERELÉS (Ha i < row_end, tehát van kártya)
                 if i < row_end and col_idx < len(row_cols) and cols_in_row[col_idx] == "card":
                     with row_cols[col_idx]:
                         card = timeline[i]
@@ -316,7 +308,6 @@ if st.session_state.game_started:
             st.session_state.turn_index += 1
             if st.session_state.deck:
                 next_song = st.session_state.deck.pop()
-                # AI Elemzés (Következő körhöz)
                 if st.session_state.get('gemini_key'):
                     fix_card_with_ai(next_song, st.session_state.gemini_key)
                 st.session_state.current_mystery_song = next_song
@@ -327,7 +318,6 @@ if st.session_state.game_started:
         c1, c2, c3 = st.columns([1,1,1])
         c2.button("KÖVETKEZŐ ➡️", on_click=next_turn, type="primary", use_container_width=True)
         
-        # Reveal nézet (csak kártyák)
         timeline = st.session_state.timelines[curr_p]
         CARDS_PER_ROW = 5
         for row_start in range(0, len(timeline), CARDS_PER_ROW):

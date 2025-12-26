@@ -17,13 +17,12 @@ DB_FILE = "party_state.json"
 # --- 1. ADATBÁZIS KEZELÉS ---
 def init_db():
     if not os.path.exists(DB_FILE):
-        # Ha nincs fájl, létrehozzuk üresen
         reset_db()
 
 def reset_db():
     state = {
         "game_phase": "LOBBY",
-        "players": [], # Üres lista, te adod hozzá őket!
+        "players": [], 
         "timelines": {},
         "lives": {},
         "deck": [],
@@ -90,7 +89,9 @@ def load_spotify_tracks(api_id, api_secret, playlist_url):
                         "spotify_id": t['id'], "image": get_image(t['album'])
                     })
         return tracks_data
-    except: return []
+    except Exception as e:
+        st.error(f"Spotify Hiba: {e}") # Kiírjuk a hibát, ha van
+        return []
 
 def fix_card_with_groq(card, api_key):
     if not api_key or Groq is None: return card
@@ -145,8 +146,6 @@ st.markdown("""
 
 # --- 4. SZEREP VÁLASZTÁS & LOGIKA ---
 if 'user_role' not in st.session_state: st.session_state.user_role = "tv"
-
-# State betöltése az elején, hogy az oldalsávban tudjuk használni
 state = load_state()
 
 # SECRETS
@@ -178,7 +177,6 @@ with st.sidebar:
                     st.success(f"{new_p} hozzáadva!")
                     st.rerun()
             
-            # Lista megjelenítése
             if state['players']:
                 st.write("Csatlakoztak:")
                 for p in state['players']:
@@ -203,27 +201,44 @@ with st.sidebar:
                 if api_id and api_secret and pl_url:
                     with st.spinner("Zene betöltése..."):
                         deck = load_spotify_tracks(api_id, api_secret, pl_url)
-                        if deck:
+                        
+                        if not deck:
+                            st.error("❌ HIBA: Nem sikerült betölteni a zenéket! Ellenőrizd a Spotify linket és a kódokat!")
+                        else:
+                            # SIKERES INDÍTÁS
                             random.shuffle(deck)
-                            state['game_phase'] = "GUESSING"
-                            state['timelines'] = {p: [] for p in state['players']}
-                            state['lives'] = {p: 3 for p in state['players']} # ❤️ Életek
-                            state['deck'] = deck
+                            current_players = state['players'] # MEGŐRIZZÜK A LÉTEZŐ JÁTÉKOSOKAT!
+                            
+                            new_state = {
+                                "game_phase": "GUESSING",
+                                "players": current_players, # Itt használjuk a hozzáadottakat
+                                "timelines": {p: [] for p in current_players},
+                                "lives": {p: 3 for p in current_players},
+                                "deck": deck,
+                                "current_mystery_song": None,
+                                "turn_index": 0,
+                                "game_msg": "",
+                                "fun_fact": "",
+                                "success": False,
+                                "waiting_for_reveal": False,
+                                "winner": None,
+                                "target_score": target_score,
+                                "correct_answer_log": None
+                            }
                             
                             # Osztás
-                            for p in state['players']:
-                                if state['deck']:
-                                    c = state['deck'].pop()
+                            for p in new_state['players']:
+                                if new_state['deck']:
+                                    c = new_state['deck'].pop()
                                     if groq_key: c = fix_card_with_groq(c, groq_key)
-                                    state['timelines'][p].append(c)
+                                    new_state['timelines'][p].append(c)
                             # Első dal
-                            if state['deck']:
-                                first = state['deck'].pop()
+                            if new_state['deck']:
+                                first = new_state['deck'].pop()
                                 if groq_key: first = fix_card_with_groq(first, groq_key)
-                                state['current_mystery_song'] = first
+                                new_state['current_mystery_song'] = first
                             
-                            state['target_score'] = target_score
-                            save_state(state)
+                            save_state(new_state)
                             st.rerun()
         else:
             if st.button("🔄 ÚJ PARTI (RESET)", type="primary"):
@@ -241,56 +256,60 @@ if st.session_state.user_role == "tv":
         st.write(f"Jelenlegi játékosok: {len(state['players'])}")
 
     elif state.get('game_phase') == "GUESSING":
-        curr_p = state['players'][state['turn_index'] % len(state['players'])]
-        song = state['current_mystery_song']
-        
-        # Header
-        cols = st.columns(len(state['players']))
-        for i, p in enumerate(state['players']):
-            is_active = (p == curr_p)
-            lives = state['lives'].get(p, 3)
-            hearts = "❤️" * lives + "🖤" * (3-lives)
-            score = len(state['timelines'][p])
-            target = state.get('target_score', 10)
-            style = "border: 2px solid #00d4ff; background: rgba(0, 212, 255, 0.1);" if is_active else "background: rgba(255,255,255,0.05); opacity: 0.6;"
-            cols[i].markdown(f"<div style='{style} padding: 10px; border-radius: 10px; text-align: center;'><div style='font-size: 1.2em; font-weight: bold;'>{p}</div><div>{hearts}</div><div style='font-size: 2em; font-weight: 900;'>{score} / {target}</div></div>", unsafe_allow_html=True)
+        # Ellenőrzés: van-e játékos
+        if not state['players']:
+            st.error("Hiba: Nincsenek játékosok! Nyomj egy RESET-et bal oldalt.")
+        else:
+            curr_p = state['players'][state['turn_index'] % len(state['players'])]
+            song = state['current_mystery_song']
+            
+            # Header
+            cols = st.columns(len(state['players']))
+            for i, p in enumerate(state['players']):
+                is_active = (p == curr_p)
+                lives = state['lives'].get(p, 3)
+                hearts = "❤️" * lives + "🖤" * (3-lives)
+                score = len(state['timelines'].get(p, []))
+                target = state.get('target_score', 10)
+                style = "border: 2px solid #00d4ff; background: rgba(0, 212, 255, 0.1);" if is_active else "background: rgba(255,255,255,0.05); opacity: 0.6;"
+                cols[i].markdown(f"<div style='{style} padding: 10px; border-radius: 10px; text-align: center;'><div style='font-size: 1.2em; font-weight: bold;'>{p}</div><div>{hearts}</div><div style='font-size: 2em; font-weight: 900;'>{score} / {target}</div></div>", unsafe_allow_html=True)
 
-        st.divider()
-        st.markdown(f"### 🎶 Most játszik: {song['artist']} - ???")
-        st.components.v1.iframe(f"https://open.spotify.com/embed/track/{song['spotify_id']}", height=80)
-        st.markdown(f"<div class='tv-status'>👉 {curr_p} tippel a telefonján...</div>", unsafe_allow_html=True)
-        
-        timeline = state['timelines'][curr_p]
-        num_cards = len(timeline)
-        if num_cards > 0:
-            t_cols = st.columns(num_cards)
-            for i, card in enumerate(timeline):
-                with t_cols[i]:
-                    st.markdown(f"<div class='timeline-card'><img src='{card.get('image', '')}'><div class='card-content'><div class='card-year'>{card['year']}</div><div class='card-title'>{card['title']}</div></div></div>", unsafe_allow_html=True)
+            st.divider()
+            st.markdown(f"### 🎶 Most játszik: {song['artist']} - ???")
+            st.components.v1.iframe(f"https://open.spotify.com/embed/track/{song['spotify_id']}", height=80)
+            st.markdown(f"<div class='tv-status'>👉 {curr_p} tippel a telefonján...</div>", unsafe_allow_html=True)
+            
+            timeline = state['timelines'][curr_p]
+            num_cards = len(timeline)
+            if num_cards > 0:
+                t_cols = st.columns(num_cards)
+                for i, card in enumerate(timeline):
+                    with t_cols[i]:
+                        st.markdown(f"<div class='timeline-card'><img src='{card.get('image', '')}'><div class='card-content'><div class='card-year'>{card['year']}</div><div class='card-title'>{card['title']}</div></div></div>", unsafe_allow_html=True)
 
-        st.divider()
-        col1, col2 = st.columns([3, 1])
-        with col2:
-            if st.button("👀 EREDMÉNY MUTATÁSA", type="primary", use_container_width=True):
-                state = load_state() 
-                if state.get('waiting_for_reveal'):
-                    state['game_phase'] = "REVEAL"
-                    state['waiting_for_reveal'] = False
-                    if groq_key:
-                        with st.spinner("AI érdekesség..."):
-                            state['fun_fact'] = get_fun_fact(state['current_mystery_song'], groq_key)
-                    
-                    curr_p_name = state['players'][state['turn_index'] % len(state['players'])]
-                    if not state['success']: state['lives'][curr_p_name] -= 1
-                    
-                    if len(state['timelines'][curr_p_name]) >= state.get('target_score', 10):
-                        state['game_phase'] = "VICTORY"
-                        state['winner'] = curr_p_name
-                    elif state['lives'][curr_p_name] <= 0:
-                         state['game_phase'] = "GAME_OVER"
-                    save_state(state)
-                    st.rerun()
-                else: st.toast("⚠️ Még nem tippeltek!", icon="⏳")
+            st.divider()
+            col1, col2 = st.columns([3, 1])
+            with col2:
+                if st.button("👀 EREDMÉNY MUTATÁSA", type="primary", use_container_width=True):
+                    state = load_state() 
+                    if state.get('waiting_for_reveal'):
+                        state['game_phase'] = "REVEAL"
+                        state['waiting_for_reveal'] = False
+                        if groq_key:
+                            with st.spinner("AI érdekesség..."):
+                                state['fun_fact'] = get_fun_fact(state['current_mystery_song'], groq_key)
+                        
+                        curr_p_name = state['players'][state['turn_index'] % len(state['players'])]
+                        if not state['success']: state['lives'][curr_p_name] -= 1
+                        
+                        if len(state['timelines'][curr_p_name]) >= state.get('target_score', 10):
+                            state['game_phase'] = "VICTORY"
+                            state['winner'] = curr_p_name
+                        elif state['lives'][curr_p_name] <= 0:
+                             state['game_phase'] = "GAME_OVER"
+                        save_state(state)
+                        st.rerun()
+                    else: st.toast("⚠️ Még nem tippeltek!", icon="⏳")
 
     elif state.get('game_phase') == "REVEAL":
         song = state['current_mystery_song']
@@ -336,7 +355,6 @@ elif st.session_state.user_role == "player":
     st.header("📱 Játékos")
     
     if 'my_name' not in st.session_state:
-        # Most már a dinamikus listából választanak!
         players_list = state.get('players', [])
         if not players_list:
             st.warning("Még nincsenek játékosok! Add hozzá őket a TV-n.")

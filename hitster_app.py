@@ -8,9 +8,14 @@ import time
 # --- 1. KONFIGURÁCIÓ ---
 st.set_page_config(page_title="Hitster TV Party", page_icon="📺", layout="wide")
 
+# CSS - Itt már csak a finomhangolás marad, a színeket a config.toml intézi
 st.markdown("""
 <style>
-    .stApp { background: linear-gradient(135deg, #1e1e2e 0%, #2d2b55 100%); color: white; }
+    /* Eltüntetjük a felső menüt és a footer-t a TV élményért */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    
     .score-card { background-color: rgba(255, 255, 255, 0.1); border-radius: 15px; padding: 15px; text-align: center; border: 2px solid transparent; transition: transform 0.2s; }
     .score-active { border: 3px solid #00d4ff; background-color: rgba(0, 212, 255, 0.15); transform: scale(1.05); box-shadow: 0 0 15px #00d4ff; }
     .score-num { font-size: 2.5em; font-weight: bold; color: #ffcc00; margin: 0; }
@@ -19,39 +24,29 @@ st.markdown("""
     .timeline-year { font-size: 1.8em; font-weight: 900; border-bottom: 1px solid rgba(255,255,255,0.3); margin-bottom: 5px; padding-bottom: 5px; }
     .mystery-box { background-color: #333; border: 3px dashed #ff4b4b; border-radius: 15px; padding: 20px; text-align: center; margin: 20px 0; }
     
-    /* Gombok stílusa */
     div.stButton > button { background-color: #ff4b4b; color: white; font-size: 20px !important; padding: 10px 24px; border-radius: 30px; border: none; box-shadow: 0 4px 0 #b33232; transition: all 0.1s; }
     div.stButton > button:active { box-shadow: none; transform: translateY(4px); }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. AI LOGIKA (EGYETLEN KÁRTYÁRA) ---
+# --- 2. AI LOGIKA ---
 def fix_card_with_ai(card, api_key):
-    """Egyetlen dal évszámát javítja ki a Geminivel."""
+    """Egyetlen dal elemzése."""
     if not api_key: return card
-    
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-pro')
-        prompt = f"""
-        What is the ORIGINAL release year of the song "{card['title']}" by "{card['artist']}"?
-        Ignore remasters. Return ONLY the year as a 4-digit number.
-        """
+        prompt = f"""What is the ORIGINAL release year of "{card['title']}" by "{card['artist']}"? Return ONLY the year (4 digits)."""
         response = model.generate_content(prompt)
         text = response.text.strip()
-        
         if text.isdigit():
             ai_year = int(text)
-            if 1900 < ai_year <= 2025:
-                # Ha az AI régebbi dátumot mond, hiszünk neki (Remaster javítás)
-                if ai_year < card['year']:
-                    card['year'] = ai_year
-    except:
-        pass # Ha hiba van, marad a Spotify dátum
-    
+            if 1900 < ai_year <= 2025 and ai_year < card['year']:
+                card['year'] = ai_year
+    except: pass
     return card
 
-# --- 3. ADATBETÖLTÉS (GYORS MÓD) ---
+# --- 3. SPOTIFY LETÖLTÉS ---
 def load_spotify_tracks(spotify_id, spotify_secret, playlist_url):
     try:
         auth_manager = SpotifyClientCredentials(client_id=spotify_id, client_secret=spotify_secret)
@@ -62,7 +57,6 @@ def load_spotify_tracks(spotify_id, spotify_secret, playlist_url):
         resource_id = clean_url.split("/")[-1]
         
         tracks_data = []
-
         if "album" in clean_url:
             album_info = sp.album(resource_id)
             album_year = int(album_info['release_date'].split('-')[0])
@@ -73,7 +67,6 @@ def load_spotify_tracks(spotify_id, spotify_secret, playlist_url):
                 items.extend(results['items'])
             for track in items:
                 tracks_data.append({"artist": track['artists'][0]['name'], "title": track['name'], "year": album_year, "spotify_id": track['id']})
-        
         elif "playlist" in clean_url:
             results = sp.playlist_items(resource_id)
             items = results['items']
@@ -87,40 +80,34 @@ def load_spotify_tracks(spotify_id, spotify_secret, playlist_url):
                     if year_str.isdigit():
                         tracks_data.append({"artist": track['artists'][0]['name'], "title": track['name'], "year": int(year_str), "spotify_id": track['id']})
         else:
-            st.error("Nem Album vagy Playlist link!")
+            st.error("Érvénytelen link!")
             return []
-
         return tracks_data
-
     except Exception as e:
         st.error(f"Spotify Hiba: {e}")
         return []
 
-# --- 4. JÁTÉK MOTOR ---
-if 'players' not in st.session_state: st.session_state.players = ["Jorgosz", "Lilla", "Józsi", "Dia"]
-if 'game_started' not in st.session_state: st.session_state.game_started = False
-
-# Függvény a következő kör előkészítésére (AI elemzéssel)
+# --- 4. CALLBACKS (JAVÍTVA) ---
+# Fontos: Itt már NINCS st.rerun(), mert az automatikus!
 def prepare_next_turn():
     st.session_state.turn_index += 1
-    
     if st.session_state.deck:
         next_song = st.session_state.deck.pop()
-        
-        # ITT TÖRTÉNIK A VARÁZSLAT:
-        # Mielőtt betennénk játéknak, gyorsan elemezzük (kb 1 mp)
+        # AI Elemzés itt történik, a háttérben
         if st.session_state.get('gemini_key'):
-             # Spinner jelzi, hogy dolgozik az AI
-            with st.spinner(f"AI DJ elemzi: {next_song['artist']}..."):
-                fix_card_with_ai(next_song, st.session_state.gemini_key)
+             # Mivel ez callback, a spinner nem mindig látszik jól, de az idő telik
+             # Az optimalizálás érdekében itt csak az adatot kérjük le
+            fix_card_with_ai(next_song, st.session_state.gemini_key)
         
         st.session_state.current_mystery_song = next_song
         st.session_state.game_phase = "GUESSING"
     else:
         st.session_state.game_phase = "GAME_OVER"
-    st.rerun()
 
-# --- 5. OLDALSÁV ---
+# --- 5. FŐ APP ---
+if 'players' not in st.session_state: st.session_state.players = ["Jorgosz", "Lilla", "Józsi", "Dia"]
+if 'game_started' not in st.session_state: st.session_state.game_started = False
+
 with st.sidebar:
     st.header("⚙️ Beállítások")
     api_id = st.text_input("Spotify Client ID", type="password")
@@ -131,40 +118,33 @@ with st.sidebar:
     
     if st.button("🚀 INDÍTÁS", type="primary"):
         if api_id and api_secret and pl_url:
-            with st.spinner("Lista letöltése..."):
-                # 1. Letöltés (Gyors)
+            with st.spinner("Csatlakozás..."):
                 raw_deck = load_spotify_tracks(api_id, api_secret, pl_url)
-                
                 if raw_deck:
                     random.shuffle(raw_deck)
                     st.session_state.deck = raw_deck
                     st.session_state.gemini_key = gemini_key_input
                     
-                    # 2. Csak a kezdő lapokat elemezzük most
                     st.session_state.timelines = {}
                     for p in st.session_state.players:
                         if not st.session_state.deck: break
                         card = st.session_state.deck.pop()
-                        if gemini_key_input: 
-                            fix_card_with_ai(card, gemini_key_input)
+                        if gemini_key_input: fix_card_with_ai(card, gemini_key_input)
                         st.session_state.timelines[p] = [card]
 
-                    # 3. Az első rejtélyes dalt is előkészítjük
                     if st.session_state.deck:
-                        first_mystery = st.session_state.deck.pop()
-                        if gemini_key_input:
-                            fix_card_with_ai(first_mystery, gemini_key_input)
-                        st.session_state.current_mystery_song = first_mystery
+                        first = st.session_state.deck.pop()
+                        if gemini_key_input: fix_card_with_ai(first, gemini_key_input)
+                        st.session_state.current_mystery_song = first
                         st.session_state.turn_index = 0
                         st.session_state.game_phase = "GUESSING"
                         st.session_state.game_started = True
                         st.rerun()
 
-# --- 6. MEGJELENÍTÉS ---
 if st.session_state.game_started:
     curr_p = st.session_state.players[st.session_state.turn_index % len(st.session_state.players)]
     
-    # Pontszámok
+    # Pontjelző
     cols = st.columns(len(st.session_state.players))
     for i, p in enumerate(st.session_state.players):
         style = "score-active" if p == curr_p else ""
@@ -176,14 +156,13 @@ if st.session_state.game_started:
         st.markdown(f"<h2 style='text-align:center'>Te jössz, {curr_p}!</h2>", unsafe_allow_html=True)
         song = st.session_state.current_mystery_song
         
-        # --- ZENELEJÁTSZÓ JAVÍTVA ---
+        # --- ZENELEJÁTSZÓ JAVÍTVA (AttributeError Fix) ---
         c1, c2, c3 = st.columns([1,2,1])
         with c2:
             st.markdown(f"<div class='mystery-box'><h3>{song['artist']}</h3><h2>{song['title']}</h2></div>", unsafe_allow_html=True)
-            # Itt volt a hiba, most már helyes:
+            # A 'with c2:' blokkon belül hívjuk meg közvetlenül a komponenst
             st.components.v1.iframe(f"https://open.spotify.com/embed/track/{song['spotify_id']}", height=80)
         
-        # Idővonal
         timeline = st.session_state.timelines[curr_p]
         t_cols = st.columns(len(timeline)*2 + 1)
         for i in range(len(timeline)+1):
@@ -205,10 +184,9 @@ if st.session_state.game_started:
         if st.session_state.success: st.balloons(); st.success(st.session_state.game_msg)
         else: st.error(st.session_state.game_msg)
         
-        # Itt hívjuk meg a következő kört (ami elemez)
+        # A gomb hívja meg a callback-et (Rerun nélkül)
         st.button("Következő dal ➡️", on_click=prepare_next_turn, type="primary")
         
-        # Jelenlegi idővonal megmutatása
         timeline = st.session_state.timelines[curr_p]
         d_cols = st.columns(len(timeline))
         for idx, card in enumerate(timeline):
@@ -221,4 +199,4 @@ if st.session_state.game_started:
         if st.button("Újra"): st.session_state.clear(); st.rerun()
 else:
     st.title("📺 Hitster Party")
-    st.info("Add meg az adatokat balra! Most már villámgyorsan indul.")
+    st.info("Kezdéshez töltsd ki az adatokat!")

@@ -10,13 +10,15 @@ if 'game_started' not in st.session_state:
     st.session_state.game_started = False
 if 'players' not in st.session_state:
     st.session_state.players = [] 
+if 'ai_logs' not in st.session_state:
+    st.session_state.ai_logs = [] # Itt tároljuk az AI üzeneteit
 
 # --- 2. KONFIGURÁCIÓ ---
 st.set_page_config(
     page_title="Hitster TV Party", 
     page_icon="🎵", 
     layout="wide",
-    initial_sidebar_state="collapsed" if st.session_state.game_started else "expanded"
+    initial_sidebar_state="expanded" # Most nyitva hagyjuk, hogy lásd a logokat!
 )
 
 # --- 3. STÍLUS 🎨 ---
@@ -87,26 +89,38 @@ st.markdown("""
     }
     .score-active { border-color: #00d4ff; background: rgba(0, 212, 255, 0.1); }
     .player-tag { background: #444; padding: 5px 10px; margin: 2px; border-radius: 15px; display: inline-block; font-size: 0.9em; }
+    
+    /* LOG DOBOZ */
+    .log-box {
+        font-family: monospace; font-size: 0.8em; background: #000; color: #0f0; padding: 10px; border-radius: 5px; max-height: 200px; overflow-y: auto;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 4. OKOS AI LOGIKA (AGRESSZÍV MÓD) ---
+# --- 4. OKOS AI LOGIKA (DEBUG MODE) ---
+def log_ai(message):
+    """Hozzáad egy üzenetet a loghoz."""
+    timestamp = time.strftime("%H:%M:%S")
+    st.session_state.ai_logs.insert(0, f"[{timestamp}] {message}")
+
 def fix_card_with_ai(card, api_key):
-    """Kijavítja a dátumot, és visszajelzést ad."""
-    if not api_key: return card
+    if not api_key: 
+        log_ai("⚠️ Nincs API kulcs megadva!")
+        return card
     
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-pro')
-        
-        # AGRESSZÍV PROMPT: Kifejezetten tiltjuk a Remaster dátumokat
+        # Próbáljuk a gyorsabb, újabb modellt, ha nem megy, visszaáll alapra
+        try:
+            model = genai.GenerativeModel('gemini-1.5-flash')
+        except:
+            model = genai.GenerativeModel('gemini-pro')
+            
         prompt = f"""
-        Task: Identify the ORIGINAL release year of the song "{card['title']}" by "{card['artist']}".
-        RULES:
-        1. Ignore "Remastered", "Anniversary Edition", "Greatest Hits", or "Compilation" release dates.
-        2. I need the year the song was FIRST released as a single or on its original album.
-        3. If it is a cover, provide the release year of THIS specific artist's version.
-        4. Return ONLY the 4-digit year (e.g. 1980). No text.
+        Fact Check: What is the ORIGINAL single/album release year of "{card['title']}" by "{card['artist']}"?
+        - Ignore Remasters, Greatest Hits, Re-issues.
+        - I need the very first year the public heard this song.
+        - Reply with ONLY the 4-digit year. Example: 1980
         """
         
         response = model.generate_content(prompt)
@@ -114,21 +128,27 @@ def fix_card_with_ai(card, api_key):
         
         if text.isdigit():
             ai_year = int(text)
-            original_year = card['year']
+            orig_year = card['year']
             
-            # Csak akkor javítunk, ha logikus (1900-2025)
+            log_ai(f"Analízis: {card['title']} | Spotify: {orig_year} | AI: {ai_year}")
+            
             if 1900 < ai_year <= 2025:
-                # HA az AI mást mond, mint a Spotify (főleg ha régebbit)
-                if ai_year != original_year:
-                    # Ha a különbség nagyobb, mint 1 év (hogy a régió megjelenések miatt ne ugráljon)
-                    if abs(ai_year - original_year) > 1:
-                        # Visszajelzés a felhasználónak (Toast)
-                        st.toast(f"🤖 AI Javította: {card['title']} ({original_year} ➝ {ai_year})", icon="✨")
-                        card['year'] = ai_year
-                        card['fixed_by_ai'] = True 
+                # HA az AI mást mond
+                if ai_year != orig_year:
+                    # Ha a különbség > 0 (bármilyen eltérésnél hiszünk az AI-nak, ha hitelesnek tűnik)
+                    # Diana Ross esetében: Spotify 2017, AI 1980 -> JAVÍTÁS
+                    card['year'] = ai_year
+                    card['fixed_by_ai'] = True
+                    log_ai(f"✅ JAVÍTVA: {card['title']} -> {ai_year}")
+                    st.toast(f"AI: {card['title']} éve javítva ({orig_year} -> {ai_year})", icon="🤖")
+                else:
+                    log_ai(f"ℹ️ Dátum egyezik ({ai_year})")
+        else:
+            log_ai(f"❌ AI válasz nem szám: '{text}'")
+            
     except Exception as e:
-        print(f"AI HIBA: {e}") # Logba írjuk a hibát
-        pass
+        log_ai(f"🔥 KRITIKUS HIBA: {str(e)}")
+        st.sidebar.error(f"AI Hiba: {e}")
         
     return card
 
@@ -196,7 +216,27 @@ with st.sidebar:
     api_id = st.text_input("Spotify ID", type="password")
     api_secret = st.text_input("Spotify Secret", type="password")
     pl_url = st.text_input("Playlist Link", value="https://open.spotify.com/playlist/2WQxrq5bmHMlVuzvtwwywV?si=KGQWViY9QESfrZc21btFzA")
-    gemini_key_input = st.text_input("Gemini API (Opcionális)", type="password")
+    
+    st.markdown("### 🧠 AI és Diagnosztika")
+    gemini_key_input = st.text_input("Gemini API Key", type="password")
+    
+    # TESZT GOMB
+    if st.button("🛠️ AI Teszt (Kattints ide!)"):
+        if not gemini_key_input:
+            st.error("Előbb írd be a kulcsot!")
+        else:
+            with st.spinner("Tesztelés..."):
+                test_card = {"title": "Upside Down", "artist": "Diana Ross", "year": 2017}
+                res = fix_card_with_ai(test_card, gemini_key_input)
+                if res['year'] == 1980:
+                    st.success("✅ SIKER! Az AI kijavította Diana Ross-t 1980-ra.")
+                else:
+                    st.error(f"❌ HIBA! Az AI nem javított. Válasz: {res['year']}. Nézd meg a logot alul!")
+
+    # LOG KIÍRÁSA
+    st.markdown("<b>AI Napló:</b>", unsafe_allow_html=True)
+    log_content = "<br>".join(st.session_state.ai_logs)
+    st.markdown(f"<div class='log-box'>{log_content}</div>", unsafe_allow_html=True)
     
     st.markdown("---")
     

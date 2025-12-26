@@ -22,9 +22,9 @@ def init_db():
 def reset_db():
     state = {
         "game_phase": "LOBBY",
-        "players": ["Játékos 1", "Játékos 2"], 
-        "timelines": {"Játékos 1": [], "Játékos 2": []},
-        "lives": {"Játékos 1": 3, "Játékos 2": 3},
+        "players": [], 
+        "timelines": {},
+        "lives": {},
         "deck": [],
         "current_mystery_song": None,
         "turn_index": 0,
@@ -50,7 +50,7 @@ def save_state(state):
 # --- 2. SPOTIFY & AI ---
 def load_spotify_tracks(api_id, api_secret, playlist_url):
     try:
-        LIMIT = 150 # Gyorsítás
+        LIMIT = 150
         auth_manager = SpotifyClientCredentials(client_id=api_id, client_secret=api_secret)
         sp = spotipy.Spotify(auth_manager=auth_manager)
         if "?" in playlist_url: clean_url = playlist_url.split("?")[0]
@@ -136,6 +136,8 @@ st.markdown("""
     .card-content { padding: 10px; }
     .card-year { font-size: 1.5em; font-weight: 900; color: #1DB954; }
     .card-title { font-weight: bold; font-size: 0.9em; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .mob-insert-btn { width: 100%; padding: 15px; margin: 10px 0; background: rgba(255,255,255,0.1); border: 2px dashed #777; color: white; font-size: 1.2em; border-radius: 8px; cursor: pointer; text-align: center; }
+    .mob-insert-btn:hover { background: #00d4ff; color: black; border-style: solid; }
     .mob-card-box { display: flex; align-items: center; gap: 10px; background: rgba(0,0,0,0.4); padding: 10px; border-radius: 8px; border: 1px solid #444; }
     .mob-card-box img { width: 50px; height: 50px; border-radius: 5px; }
     .tv-status { padding: 20px; border-radius: 15px; text-align: center; font-size: 1.5em; font-weight: bold; margin: 20px 0; background: rgba(0,0,0,0.5); border: 2px solid #555; animation: pulse 2s infinite; }
@@ -147,6 +149,7 @@ st.markdown("""
 
 # --- 4. SZEREP VÁLASZTÁS & LOGIKA ---
 if 'user_role' not in st.session_state: st.session_state.user_role = "tv"
+if 'refresher' not in st.session_state: st.session_state.refresher = 0 # Ez kell az auto-reloadhoz
 state = load_state()
 
 # SECRETS
@@ -270,48 +273,52 @@ if st.session_state.user_role == "tv":
 
             st.divider()
             
-            # --- ZENE (NEM FRISSÜL) ---
+            # --- ZENE ---
             st.markdown(f"### 🎶 Most játszik: {song['artist']} - ???")
             st.components.v1.iframe(f"https://open.spotify.com/embed/track/{song['spotify_id']}", height=80)
             
-            # --- AUTOMATIKUS FRISSÍTŐ SZEKCIÓ (FRAGMENT) ---
-            # Ez a rész 1 másodpercenként frissül, de a ZENE (fentebb) NEM!
+            # --- AUTOMATIKUS FIGYELŐ (FRAGMENT) ---
+            # Ez a kis részlet 1 másodpercenként frissül a háttérben
+            # Ha észleli a tippet, azonnal továbbdobja az egész oldalt
             @st.fragment(run_every=1)
-            def check_for_player_input():
+            def auto_reveal_watcher():
+                # Mindig a legfrissebb állapotot olvassuk
                 current_state = load_state()
+                
                 if current_state.get('waiting_for_reveal'):
-                    st.success(f"✅ {curr_p} ELKÜLDTE A TIPPET!")
-                    st.markdown("### 👇 NYOMD MEG A GOMBOT! 👇")
+                    # TIPP ÉRKEZETT! FELDOLGOZÁS...
+                    st.success("✅ TIPP ÉRKEZETT! EREDMÉNY BETÖLTÉSE...")
                     
-                    if st.button("👀 EREDMÉNY MUTATÁSA", type="primary", use_container_width=True):
-                        # Ez itt már egy full page reloadot fog triggerelni a state változás miatt
-                        current_state['game_phase'] = "REVEAL"
-                        current_state['waiting_for_reveal'] = False
-                        
-                        # AI Fun Fact (itt nem gond a várakozás, mert a zene már megáll)
-                        if groq_key:
-                            current_state['fun_fact'] = get_fun_fact(current_state['current_mystery_song'], groq_key)
-                        
-                        # Pontozás
-                        curr_p_name = current_state['players'][current_state['turn_index'] % len(current_state['players'])]
-                        if not current_state['success']: current_state['lives'][curr_p_name] -= 1
-                        
-                        # Győzelem / Game Over
-                        if len(current_state['timelines'][curr_p_name]) >= current_state.get('target_score', 10):
-                            current_state['game_phase'] = "VICTORY"
-                            current_state['winner'] = curr_p_name
-                        elif current_state['lives'][curr_p_name] <= 0:
-                             current_state['game_phase'] = "GAME_OVER"
-                        
-                        save_state(current_state)
-                        st.rerun()
+                    # 1. Állapot frissítése
+                    current_state['game_phase'] = "REVEAL"
+                    current_state['waiting_for_reveal'] = False
+                    
+                    # 2. AI Fun Fact
+                    if groq_key:
+                        current_state['fun_fact'] = get_fun_fact(current_state['current_mystery_song'], groq_key)
+                    
+                    # 3. Pontozás
+                    curr_p_name = current_state['players'][current_state['turn_index'] % len(current_state['players'])]
+                    if not current_state['success']: current_state['lives'][curr_p_name] -= 1
+                    
+                    # 4. Győzelem / Game Over
+                    if len(current_state['timelines'][curr_p_name]) >= current_state.get('target_score', 10):
+                        current_state['game_phase'] = "VICTORY"
+                        current_state['winner'] = curr_p_name
+                    elif current_state['lives'][curr_p_name] <= 0:
+                         current_state['game_phase'] = "GAME_OVER"
+                    
+                    # 5. Mentés és ÚJRAINDÍTÁS
+                    save_state(current_state)
+                    # Ez a trükk kényszeríti az egész oldal újratöltését
+                    st.session_state.refresher += 1
+                    st.rerun()
                 else:
                     st.markdown(f"<div class='tv-status'>👉 {curr_p} tippel a telefonján...</div>", unsafe_allow_html=True)
-            
-            check_for_player_input()
+
+            auto_reveal_watcher()
             # ----------------------------------------------------
 
-            # Idővonal
             st.divider()
             timeline = state['timelines'][curr_p]
             num_cards = len(timeline)
@@ -388,8 +395,8 @@ elif st.session_state.user_role == "player":
             if curr_p == me:
                 if state.get('waiting_for_reveal'):
                     st.success("✅ TIPP ELKÜLDVE!")
-                    st.info("Most nézd a TV-t! Az eredmény hamarosan megjelenik.")
-                    if st.button("🔄 Frissítés", use_container_width=True): st.rerun()
+                    st.info("Most nézd a TV-t! Az eredmény automatikusan megjelenik.")
+                    if st.button("🔄 Frissítés (Ha kész a TV)", use_container_width=True): st.rerun()
                 else:
                     st.success("🔴 TE JÖSSZ!")
                     timeline = state['timelines'][me]
@@ -433,7 +440,8 @@ elif st.session_state.user_role == "player":
             if song:
                 st.image(song.get('image', ''), use_container_width=True)
                 st.markdown(f"<div style='text-align:center'>HELYES ÉV: <b>{song['year']}</b><br>{song['title']}</div>", unsafe_allow_html=True)
-            if st.button("🔄 Frissítés (Várj a következő körre)", use_container_width=True): st.rerun()
+            st.info("Várd meg, amíg a TV-n megnyomják a 'Következő kör' gombot!")
+            if st.button("🔄 Frissítés", use_container_width=True): st.rerun()
         
         else:
             st.info("Várakozás a játékra...")

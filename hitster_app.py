@@ -28,7 +28,7 @@ st.markdown("""
     }
     #MainMenu, footer {visibility: hidden;}
 
-    /* KÁRTYA STÍLUS */
+    /* KÁRTYA */
     .timeline-card {
         background: linear-gradient(180deg, #1DB954 0%, #117a35 100%);
         color: white;
@@ -48,7 +48,7 @@ st.markdown("""
         border-bottom: 1px solid rgba(255,255,255,0.3); margin-bottom: 5px;
         text-shadow: 1px 1px 2px black; 
     }
-    .ai-badge { font-size: 0.4em; vertical-align: super; color: #ffff00; }
+    .ai-badge { font-size: 0.5em; vertical-align: super; color: #ffff00; text-shadow: 0 0 5px gold; }
     .card-title { font-weight: bold; font-size: 1.1em; line-height: 1.2; }
     .card-artist { font-size: 0.9em; opacity: 0.9; margin-bottom: 5px; }
 
@@ -81,34 +81,55 @@ st.markdown("""
         border: 2px solid #ff4b4b; border-radius: 15px; padding: 10px;
         text-align: center; background: #222; max-width: 500px; margin: 0 auto;
     }
-
     .score-box {
         background: rgba(255,255,255,0.05); padding: 5px 15px;
         border-radius: 8px; text-align: center; border: 1px solid transparent;
     }
     .score-active { border-color: #00d4ff; background: rgba(0, 212, 255, 0.1); }
-    
-    .player-tag {
-        background: #444; padding: 5px 10px; margin: 2px; border-radius: 15px; display: inline-block; font-size: 0.9em;
-    }
+    .player-tag { background: #444; padding: 5px 10px; margin: 2px; border-radius: 15px; display: inline-block; font-size: 0.9em; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 4. LOGIKA ---
+# --- 4. OKOS AI LOGIKA (AGRESSZÍV MÓD) ---
 def fix_card_with_ai(card, api_key):
+    """Kijavítja a dátumot, és visszajelzést ad."""
     if not api_key: return card
+    
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-pro')
-        prompt = f"""What is the ORIGINAL release year of "{card['title']}" by "{card['artist']}"? Return ONLY the 4-digit year."""
+        
+        # AGRESSZÍV PROMPT: Kifejezetten tiltjuk a Remaster dátumokat
+        prompt = f"""
+        Task: Identify the ORIGINAL release year of the song "{card['title']}" by "{card['artist']}".
+        RULES:
+        1. Ignore "Remastered", "Anniversary Edition", "Greatest Hits", or "Compilation" release dates.
+        2. I need the year the song was FIRST released as a single or on its original album.
+        3. If it is a cover, provide the release year of THIS specific artist's version.
+        4. Return ONLY the 4-digit year (e.g. 1980). No text.
+        """
+        
         response = model.generate_content(prompt)
         text = response.text.strip()
+        
         if text.isdigit():
             ai_year = int(text)
-            if 1900 < ai_year <= 2025 and ai_year < card['year']:
-                card['year'] = ai_year
-                card['fixed_by_ai'] = True 
-    except: pass
+            original_year = card['year']
+            
+            # Csak akkor javítunk, ha logikus (1900-2025)
+            if 1900 < ai_year <= 2025:
+                # HA az AI mást mond, mint a Spotify (főleg ha régebbit)
+                if ai_year != original_year:
+                    # Ha a különbség nagyobb, mint 1 év (hogy a régió megjelenések miatt ne ugráljon)
+                    if abs(ai_year - original_year) > 1:
+                        # Visszajelzés a felhasználónak (Toast)
+                        st.toast(f"🤖 AI Javította: {card['title']} ({original_year} ➝ {ai_year})", icon="✨")
+                        card['year'] = ai_year
+                        card['fixed_by_ai'] = True 
+    except Exception as e:
+        print(f"AI HIBA: {e}") # Logba írjuk a hibát
+        pass
+        
     return card
 
 def load_spotify_tracks(spotify_id, spotify_secret, playlist_url):
@@ -238,9 +259,7 @@ if st.session_state.game_started:
         
         timeline = st.session_state.timelines[curr_p]
         
-        # --- JAVÍTOTT CIKLUS (Duplikációmentes) ---
         CARDS_PER_ROW = 4
-        # Fontos: A range nem mehet túl a listán, és nem szabad +1-et adni
         for row_start in range(0, len(timeline), CARDS_PER_ROW):
             row_end = min(row_start + CARDS_PER_ROW, len(timeline))
             
@@ -249,7 +268,6 @@ if st.session_state.game_started:
                 cols_in_row.append("btn")
                 cols_in_row.append("card")
             
-            # Záró gomb csak akkor, ha ez az utolsó sor ÉS vége a teljes listának
             if row_end == len(timeline):
                 cols_in_row.append("btn")
                 

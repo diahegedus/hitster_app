@@ -50,6 +50,8 @@ def save_state(state):
 # --- 2. SPOTIFY & AI ---
 def load_spotify_tracks(api_id, api_secret, playlist_url):
     try:
+        # Limitáljuk a dalok számát a stabilitásért
+        LIMIT = 150
         auth_manager = SpotifyClientCredentials(client_id=api_id, client_secret=api_secret)
         sp = spotipy.Spotify(auth_manager=auth_manager)
         if "?" in playlist_url: clean_url = playlist_url.split("?")[0]
@@ -67,10 +69,11 @@ def load_spotify_tracks(api_id, api_secret, playlist_url):
             year = int(album_info['release_date'][:4])
             img_url = get_image(album_info)
             items = results['items']
-            while results['next']:
+            while results['next'] and len(items) < LIMIT:
                 results = sp.next(results)
                 items.extend(results['items'])
             for track in items:
+                if len(tracks_data) >= LIMIT: break
                 tracks_data.append({
                     "artist": track['artists'][0]['name'], "title": track['name'], "year": year, 
                     "spotify_id": track['id'], "image": img_url
@@ -78,10 +81,11 @@ def load_spotify_tracks(api_id, api_secret, playlist_url):
         elif "playlist" in clean_url:
             results = sp.playlist_items(resource_id)
             items = results['items']
-            while results['next']:
+            while results['next'] and len(items) < LIMIT:
                 results = sp.next(results)
                 items.extend(results['items'])
             for item in items:
+                if len(tracks_data) >= LIMIT: break
                 t = item['track']
                 if t and t['album']['release_date']:
                     tracks_data.append({
@@ -90,7 +94,7 @@ def load_spotify_tracks(api_id, api_secret, playlist_url):
                     })
         return tracks_data
     except Exception as e:
-        st.error(f"Spotify Hiba: {e}") # Kiírjuk a hibát, ha van
+        st.error(f"Spotify Hiba: {e}")
         return []
 
 def fix_card_with_groq(card, api_key):
@@ -166,7 +170,7 @@ with st.sidebar:
     if st.session_state.user_role == "tv":
         st.header("⚙️ Beállítások")
         
-        # 1. JÁTÉKOS HOZZÁADÁSA (Csak Lobby-ban)
+        # JÁTÉKOS HOZZÁADÁSA (Csak Lobby-ban)
         if state['game_phase'] == "LOBBY":
             st.subheader("👥 Játékosok")
             new_p = st.text_input("Játékos neve:", key="new_player_input")
@@ -188,30 +192,27 @@ with st.sidebar:
                     st.rerun()
             st.divider()
 
-        # 2. KULCSOK
+        # KULCSOK
         api_id = st.text_input("Spotify ID", value=default_id, type="password")
         api_secret = st.text_input("Spotify Secret", value=default_secret, type="password")
         groq_key = st.text_input("Groq Key", value=default_groq, type="password")
         pl_url = st.text_input("Playlist URL", value="https://open.spotify.com/playlist/37i9dQZF1DXbTxeAdrVG2l")
         target_score = st.number_input("🏆 Cél:", min_value=1, value=10)
         
-        # 3. INDÍTÁS GOMBOK
+        # INDÍTÁS
         if state['game_phase'] == "LOBBY":
             if st.button("🚀 JÁTÉK START", type="primary", disabled=len(state['players']) == 0):
                 if api_id and api_secret and pl_url:
                     with st.spinner("Zene betöltése..."):
                         deck = load_spotify_tracks(api_id, api_secret, pl_url)
-                        
                         if not deck:
                             st.error("❌ HIBA: Nem sikerült betölteni a zenéket! Ellenőrizd a Spotify linket és a kódokat!")
                         else:
-                            # SIKERES INDÍTÁS
                             random.shuffle(deck)
-                            current_players = state['players'] # MEGŐRIZZÜK A LÉTEZŐ JÁTÉKOSOKAT!
-                            
+                            current_players = state['players']
                             new_state = {
                                 "game_phase": "GUESSING",
-                                "players": current_players, # Itt használjuk a hozzáadottakat
+                                "players": current_players,
                                 "timelines": {p: [] for p in current_players},
                                 "lives": {p: 3 for p in current_players},
                                 "deck": deck,
@@ -225,7 +226,6 @@ with st.sidebar:
                                 "target_score": target_score,
                                 "correct_answer_log": None
                             }
-                            
                             # Osztás
                             for p in new_state['players']:
                                 if new_state['deck']:
@@ -256,7 +256,6 @@ if st.session_state.user_role == "tv":
         st.write(f"Jelenlegi játékosok: {len(state['players'])}")
 
     elif state.get('game_phase') == "GUESSING":
-        # Ellenőrzés: van-e játékos
         if not state['players']:
             st.error("Hiba: Nincsenek játékosok! Nyomj egy RESET-et bal oldalt.")
         else:
@@ -277,8 +276,13 @@ if st.session_state.user_role == "tv":
             st.divider()
             st.markdown(f"### 🎶 Most játszik: {song['artist']} - ???")
             st.components.v1.iframe(f"https://open.spotify.com/embed/track/{song['spotify_id']}", height=80)
-            st.markdown(f"<div class='tv-status'>👉 {curr_p} tippel a telefonján...</div>", unsafe_allow_html=True)
             
+            if state.get('waiting_for_reveal'):
+                st.success(f"✅ {curr_p} tippelt! Mutasd az eredményt!")
+            else:
+                st.markdown(f"<div class='tv-status'>👉 {curr_p} tippel a telefonján...</div>", unsafe_allow_html=True)
+            
+            # Idővonal
             timeline = state['timelines'][curr_p]
             num_cards = len(timeline)
             if num_cards > 0:
@@ -295,6 +299,7 @@ if st.session_state.user_role == "tv":
                     if state.get('waiting_for_reveal'):
                         state['game_phase'] = "REVEAL"
                         state['waiting_for_reveal'] = False
+                        
                         if groq_key:
                             with st.spinner("AI érdekesség..."):
                                 state['fun_fact'] = get_fun_fact(state['current_mystery_song'], groq_key)
@@ -369,36 +374,54 @@ elif st.session_state.user_role == "player":
         lives = state['lives'].get(me, 3)
         st.caption(f"Belépve: **{me}** | Életek: {'❤️' * lives}")
 
+        # HELYI FRISSÍTÉS (Hogy ne legyen régi az adat)
+        state = load_state()
+
         if state.get('game_phase') == "GUESSING":
             curr_p = state['players'][state['turn_index'] % len(state['players'])]
             
             if curr_p == me:
-                st.success("🔴 TE JÖSSZ!")
-                timeline = state['timelines'][me]
-                
-                if st.button("⬇️ IDE (Elejére) ⬇️", key="mob_btn_start", use_container_width=True):
-                    song = state['current_mystery_song']
-                    next_ok = (len(timeline) == 0) or (timeline[0]['year'] >= song['year'])
-                    state['success'] = next_ok
-                    state['correct_answer_log'] = song
-                    if state['success']: state['timelines'][me].insert(0, song)
-                    state['waiting_for_reveal'] = True
-                    save_state(state)
-                    st.rerun()
-
-                for i, card in enumerate(timeline):
-                    st.markdown(f"<div class='mob-card-box'><img src='{card.get('image', '')}'><div><div style='font-weight:bold; font-size:1.2em'>{card['year']}</div><div>{card['title']}</div></div></div>", unsafe_allow_html=True)
-                    if st.button(f"⬇️ IDE ⬇️", key=f"mob_btn_{i+1}", use_container_width=True):
+                # --- VÉDELEM DUPLA KATTINTÁS ELLEN ---
+                if state.get('waiting_for_reveal'):
+                    st.success("✅ TIPP ELKÜLDVE!")
+                    st.info("Most nézd a TV-t! A házigazda hamarosan megmutatja az eredményt.")
+                    if st.button("🔄 Frissítés (Ha kész a TV)", use_container_width=True): st.rerun()
+                else:
+                    st.success("🔴 TE JÖSSZ!")
+                    timeline = state['timelines'][me]
+                    
+                    # 1. Gomb az elejére
+                    if st.button("⬇️ IDE (Elejére) ⬇️", key="mob_btn_start", use_container_width=True):
+                        # DUPLIKÁCIÓ ELLENŐRZÉS
                         song = state['current_mystery_song']
-                        pos = i + 1
-                        prev_ok = (timeline[pos-1]['year'] <= song['year'])
-                        next_ok = (pos == len(timeline)) or (timeline[pos]['year'] >= song['year'])
-                        state['success'] = (prev_ok and next_ok)
-                        state['correct_answer_log'] = song
-                        if state['success']: state['timelines'][me].insert(pos, song)
-                        state['waiting_for_reveal'] = True
-                        save_state(state)
-                        st.rerun()
+                        already_in = any(c['spotify_id'] == song['spotify_id'] for c in timeline)
+                        
+                        if not already_in:
+                            next_ok = (len(timeline) == 0) or (timeline[0]['year'] >= song['year'])
+                            state['success'] = next_ok
+                            state['correct_answer_log'] = song
+                            if state['success']: state['timelines'][me].insert(0, song)
+                            state['waiting_for_reveal'] = True
+                            save_state(state)
+                            st.rerun()
+
+                    for i, card in enumerate(timeline):
+                        st.markdown(f"<div class='mob-card-box'><img src='{card.get('image', '')}'><div><div style='font-weight:bold; font-size:1.2em'>{card['year']}</div><div>{card['title']}</div></div></div>", unsafe_allow_html=True)
+                        if st.button(f"⬇️ IDE ⬇️", key=f"mob_btn_{i+1}", use_container_width=True):
+                            # DUPLIKÁCIÓ ELLENŐRZÉS
+                            song = state['current_mystery_song']
+                            already_in = any(c['spotify_id'] == song['spotify_id'] for c in timeline)
+                            
+                            if not already_in:
+                                pos = i + 1
+                                prev_ok = (timeline[pos-1]['year'] <= song['year'])
+                                next_ok = (pos == len(timeline)) or (timeline[pos]['year'] >= song['year'])
+                                state['success'] = (prev_ok and next_ok)
+                                state['correct_answer_log'] = song
+                                if state['success']: state['timelines'][me].insert(pos, song)
+                                state['waiting_for_reveal'] = True
+                                save_state(state)
+                                st.rerun()
             else:
                 st.warning(f"Most {curr_p} gondolkodik...")
                 if st.button("🔄 Frissítés", use_container_width=True): st.rerun()
@@ -411,7 +434,8 @@ elif st.session_state.user_role == "player":
             if song:
                 st.image(song.get('image', ''), use_container_width=True)
                 st.markdown(f"<div style='text-align:center'>HELYES ÉV: <b>{song['year']}</b><br>{song['title']}</div>", unsafe_allow_html=True)
-            if st.button("🔄 Frissítés (Várj a következő körre)", use_container_width=True): st.rerun()
+            st.info("Várd meg, amíg a TV-n megnyomják a 'Következő kör' gombot!")
+            if st.button("🔄 Frissítés", use_container_width=True): st.rerun()
         
         else:
             st.info("Várakozás a játékra...")

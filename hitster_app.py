@@ -103,7 +103,6 @@ def fix_card_with_ai(card, api_key):
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-pro')
         
-        # Szigorúbb prompt
         prompt = f"""
         What is the ORIGINAL release year of the song "{card['title']}" by "{card['artist']}"?
         Ignore Remastered, Best Of, or Compilation dates.
@@ -117,15 +116,13 @@ def fix_card_with_ai(card, api_key):
             ai_year = int(text)
             original_year = card['year']
             
-            # Csak akkor javítunk, ha logikus (1900-2025)
             if 1900 < ai_year <= 2025:
                 # HA az AI régebbit mond, MINT a Spotify -> JAVÍTUNK
                 # VAGY ha a Spotify nagyon új (pl 2020), de a dal egyértelműen régi
                 if ai_year < original_year:
                     card['year'] = ai_year
-                    card['fixed_by_ai'] = True # Megjelöljük, hogy az AI nyúlt hozzá
+                    card['fixed_by_ai'] = True 
     except Exception as e:
-        # Ha hiba van, kiírjuk a konzolra (így látni fogod, ha baj van a kulccsal)
         print(f"AI HIBA: {e}")
         pass
         
@@ -255,58 +252,61 @@ if st.session_state.game_started:
         
         timeline = st.session_state.timelines[curr_p]
         
-        # RÁCSOS ELRENDEZÉS
+        # --- JAVÍTOTT RÁCSOS ELRENDEZÉS (DUPLIKÁCIÓK NÉLKÜL) ---
         CARDS_PER_ROW = 4
-        for row_start in range(0, len(timeline) + 1, CARDS_PER_ROW):
+        # Csak a timeline hosszáig iterálunk
+        for row_start in range(0, len(timeline), CARDS_PER_ROW):
             row_end = min(row_start + CARDS_PER_ROW, len(timeline))
             
-            # Sor összerakása: Gomb, Kártya, Gomb, Kártya...
+            # Építjük a sort: minden kártya elé gomb, és a kártya maga
             cols_in_row = []
             for i in range(row_start, row_end):
                 cols_in_row.append("btn")
                 cols_in_row.append("card")
+            
+            # Ha ez az UTOLSÓ sor, és vége a timeline-nak, kell a záró gomb
             if row_end == len(timeline):
                 cols_in_row.append("btn")
                 
             if not cols_in_row: continue
 
-            # Oszlopok létrehozása
+            # Oszlopok definíciója
             spec = [1 if x == "btn" else 4 for x in cols_in_row]
             row_cols = st.columns(spec)
             
             col_idx = 0
+            # Végigmegyünk a sor elemeien, de figyelünk a záró gombra is
             for i in range(row_start, row_end + 1):
-                # GOMB
-                if i <= len(timeline):
-                    if col_idx < len(row_cols):
-                        with row_cols[col_idx]:
-                            st.markdown("<br>", unsafe_allow_html=True)
-                            if st.button("➕", key=f"btn_{i}", use_container_width=True):
-                                song = st.session_state.current_mystery_song
-                                prev_ok = (i==0) or (timeline[i-1]['year'] <= song['year'])
-                                next_ok = (i==len(timeline)) or (timeline[i]['year'] >= song['year'])
-                                st.session_state.success = (prev_ok and next_ok)
-                                st.session_state.game_msg = f"TALÁLT! ({song['year']})" if st.session_state.success else f"NEM... ({song['year']})"
-                                if st.session_state.success: st.session_state.timelines[curr_p].insert(i, song)
-                                st.session_state.game_phase = "REVEAL"
-                                st.rerun()
-                        col_idx += 1
                 
-                # KÁRTYA
-                if i < row_end:
-                    if col_idx < len(row_cols):
-                        with row_cols[col_idx]:
-                            card = timeline[i]
-                            # Csillag jelzés, ha AI javította
-                            ai_badge = "<span class='ai-badge'>✨</span>" if card.get('fixed_by_ai') else ""
-                            st.markdown(f"""
-                            <div class='timeline-card'>
-                                <div class='card-year'>{card['year']}{ai_badge}</div>
-                                <div class='card-title'>{card['title']}</div>
-                                <div class='card-artist'>{card['artist']}</div>
-                            </div>
-                            """, unsafe_allow_html=True)
-                        col_idx += 1
+                # GOMB RENDERELÉS (Ha i <= len(timeline), tehát van még hely)
+                # De csak akkor rakjuk ki a gombot, ha még "fér" a sorba (col_idx)
+                if col_idx < len(row_cols) and cols_in_row[col_idx] == "btn":
+                     with row_cols[col_idx]:
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        if st.button("➕", key=f"btn_{i}", use_container_width=True):
+                            song = st.session_state.current_mystery_song
+                            prev_ok = (i==0) or (timeline[i-1]['year'] <= song['year'])
+                            next_ok = (i==len(timeline)) or (timeline[i]['year'] >= song['year'])
+                            st.session_state.success = (prev_ok and next_ok)
+                            st.session_state.game_msg = f"TALÁLT! ({song['year']})" if st.session_state.success else f"NEM... ({song['year']})"
+                            if st.session_state.success: st.session_state.timelines[curr_p].insert(i, song)
+                            st.session_state.game_phase = "REVEAL"
+                            st.rerun()
+                     col_idx += 1
+                
+                # KÁRTYA RENDERELÉS (Ha i < row_end, tehát van kártya)
+                if i < row_end and col_idx < len(row_cols) and cols_in_row[col_idx] == "card":
+                    with row_cols[col_idx]:
+                        card = timeline[i]
+                        ai_badge = "<span class='ai-badge'>✨</span>" if card.get('fixed_by_ai') else ""
+                        st.markdown(f"""
+                        <div class='timeline-card'>
+                            <div class='card-year'>{card['year']}{ai_badge}</div>
+                            <div class='card-title'>{card['title']}</div>
+                            <div class='card-artist'>{card['artist']}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    col_idx += 1
             st.markdown("<br>", unsafe_allow_html=True)
 
     elif st.session_state.game_phase == "REVEAL":

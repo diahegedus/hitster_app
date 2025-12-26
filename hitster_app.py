@@ -97,10 +97,29 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 4. OKOS AI LOGIKA (STABIL GEMINI-PRO) ---
+# --- 4. OKOS AI LOGIKA (MULTI-MODEL FAILSAFE) ---
 def log_ai(message):
     timestamp = time.strftime("%H:%M:%S")
     st.session_state.ai_logs.insert(0, f"[{timestamp}] {message}")
+
+def get_gemini_response(api_key, prompt):
+    """Megpróbálja a modelleket sorban, amíg az egyik nem válaszol."""
+    genai.configure(api_key=api_key)
+    
+    # Modellek listája fontossági sorrendben
+    models_to_try = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.0-pro']
+    
+    for model_name in models_to_try:
+        try:
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(prompt)
+            return response.text, model_name # Siker! Visszaadjuk a választ és a modell nevét
+        except Exception as e:
+            # Ha 404 vagy más hiba, naplózzuk és megyünk a következőre
+            # log_ai(f"⚠️ {model_name} hiba: {str(e)}") 
+            continue
+            
+    raise Exception("Minden AI modell elérhetetlen volt.")
 
 def fix_card_with_ai(card, api_key):
     if not api_key: 
@@ -108,10 +127,6 @@ def fix_card_with_ai(card, api_key):
         return card
     
     try:
-        genai.configure(api_key=api_key)
-        # JAVÍTÁS: Csak a 'gemini-pro' modellt használjuk, ez a biztos pont
-        model = genai.GenerativeModel('gemini-pro')
-            
         prompt = f"""
         Fact Check: What is the ORIGINAL single/album release year of "{card['title']}" by "{card['artist']}"?
         - Ignore Remasters, Greatest Hits, Re-issues.
@@ -119,18 +134,18 @@ def fix_card_with_ai(card, api_key):
         - Reply with ONLY the 4-digit year. Example: 1980
         """
         
-        response = model.generate_content(prompt)
-        text = response.text.strip()
+        # Itt hívjuk meg az új "több-modelles" függvényt
+        text_resp, used_model = get_gemini_response(api_key, prompt)
+        text = text_resp.strip()
         
         if text.isdigit():
             ai_year = int(text)
             orig_year = card['year']
             
-            log_ai(f"Analízis: {card['title']} | Spotify: {orig_year} | AI: {ai_year}")
+            log_ai(f"Analízis ({used_model}): {card['title']} | Spotify: {orig_year} | AI: {ai_year}")
             
             if 1900 < ai_year <= 2025:
                 if ai_year != orig_year:
-                    # Ha van eltérés, javítunk (főleg ha >1 év)
                     if abs(ai_year - orig_year) > 0:
                         card['year'] = ai_year
                         card['fixed_by_ai'] = True
@@ -142,8 +157,7 @@ def fix_card_with_ai(card, api_key):
             log_ai(f"❌ AI válasz nem szám: '{text}'")
             
     except Exception as e:
-        log_ai(f"🔥 HIBA: {str(e)}")
-        # Nem írjuk ki a képernyőre a hibát, hogy ne zavarja a játékot, csak a logba
+        log_ai(f"🔥 MINDEN MODEL HIBA: {str(e)}")
         
     return card
 
@@ -215,18 +229,21 @@ with st.sidebar:
     st.markdown("### 🧠 AI és Diagnosztika")
     gemini_key_input = st.text_input("Gemini API Key", type="password")
     
-    # TESZT GOMB
+    # TESZT GOMB (Most már a failsafe logikát használja)
     if st.button("🛠️ AI Teszt (Kattints ide!)"):
         if not gemini_key_input:
             st.error("Előbb írd be a kulcsot!")
         else:
-            with st.spinner("Tesztelés (gemini-pro)..."):
-                test_card = {"title": "Upside Down", "artist": "Diana Ross", "year": 2017}
-                res = fix_card_with_ai(test_card, gemini_key_input)
-                if res['year'] == 1980:
-                    st.success("✅ SIKER! Az AI kijavította Diana Ross-t 1980-ra.")
-                else:
-                    st.error(f"❌ HIBA! Az AI nem javított. Válasz: {res['year']}. Nézd meg a logot alul!")
+            with st.spinner("Tesztelés (Összes modell próbálása)..."):
+                try:
+                    test_card = {"title": "Upside Down", "artist": "Diana Ross", "year": 2017}
+                    res = fix_card_with_ai(test_card, gemini_key_input)
+                    if res['year'] == 1980:
+                        st.success("✅ SIKER! Az AI kijavította Diana Ross-t 1980-ra.")
+                    else:
+                        st.error(f"❌ HIBA! Az AI nem javított. Válasz: {res['year']}. Nézd meg a logot alul!")
+                except Exception as e:
+                     st.error(f"Kritikus hiba a teszt során: {e}")
 
     st.markdown("<b>AI Napló:</b>", unsafe_allow_html=True)
     log_content = "<br>".join(st.session_state.ai_logs)

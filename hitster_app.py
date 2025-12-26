@@ -20,10 +20,9 @@ def init_db():
         reset_db()
 
 def reset_db():
-    # Ez az alapállapot
     state = {
         "game_phase": "LOBBY",
-        "players": ["Játékos 1", "Játékos 2"], # Alap nevek
+        "players": ["Játékos 1", "Játékos 2"], 
         "timelines": {"Játékos 1": [], "Játékos 2": []},
         "deck": [],
         "current_mystery_song": None,
@@ -53,7 +52,6 @@ def load_spotify_tracks(api_id, api_secret, playlist_url):
         resource_id = clean_url.split("/")[-1]
         tracks_data = []
         
-        # Egyszerűsített logika a stabilitásért
         if "album" in clean_url:
             results = sp.album_tracks(resource_id)
             album_info = sp.album(resource_id)
@@ -81,8 +79,7 @@ def fix_card_with_groq(card, api_key):
     if not api_key or Groq is None: return card
     try:
         client = Groq(api_key=api_key)
-        # Szigorú prompt a 4 jegyű számhoz
-        prompt = f"What is the ORIGINAL release year of '{card['title']}' by '{card['artist']}'? Return ONLY the year (e.g. 1980)."
+        prompt = f"Fact Check: ORIGINAL release year of '{card['title']}' by '{card['artist']}'? Reply ONLY 4-digit year."
         completion = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}], temperature=0, max_tokens=10)
         text = completion.choices[0].message.content.strip()
         if text.isdigit():
@@ -109,15 +106,19 @@ st.markdown("""
     .card-year { font-size: 1.8em; font-weight: 900; border-bottom: 1px solid rgba(255,255,255,0.3); }
     .card-title { font-weight: bold; font-size: 1.1em; line-height: 1.2; }
     
-    /* MOBIL GOMBOK */
-    .mob-btn { 
-        width: 100%; padding: 20px; margin: 10px 0; 
-        background: rgba(255,255,255,0.1); border: 2px dashed #777; 
-        color: white; font-size: 1.5em; border-radius: 12px; cursor: pointer; text-align: center;
+    /* JAVÍTOTT MOBIL GOMB STÍLUS */
+    .mob-insert-btn { 
+        width: 100%; padding: 15px; margin: 5px 0; 
+        background: rgba(0, 212, 255, 0.15); border: 2px dashed #00d4ff; 
+        color: white; font-size: 1.1em; border-radius: 8px; cursor: pointer; text-align: center;
     }
-    .mob-btn:active { background: #00d4ff; color: black; }
+    .mob-insert-btn:hover { background: #00d4ff; color: black; }
     
-    /* TV STATUS */
+    .mob-card-box {
+        background: rgba(255,255,255,0.05); padding: 10px; border-radius: 8px;
+        text-align: center; margin-bottom: 5px; border: 1px solid #444;
+    }
+
     .tv-status {
         padding: 20px; border-radius: 15px; text-align: center; 
         font-size: 1.5em; font-weight: bold; margin: 20px 0;
@@ -127,9 +128,9 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 4. SZEREP VÁLASZTÁS (AZ OLDALSÁVON) ---
+# --- 4. SZEREP VÁLASZTÁS ---
 if 'user_role' not in st.session_state:
-    st.session_state.user_role = "tv" # Alapértelmezett
+    st.session_state.user_role = "tv"
 
 with st.sidebar:
     st.title("🎛️ MENÜ")
@@ -142,7 +143,6 @@ with st.sidebar:
 
     st.divider()
 
-    # TV ADMIN GOMBOK
     if st.session_state.user_role == "tv":
         st.header("⚙️ Beállítások")
         api_id = st.text_input("Spotify ID", type="password")
@@ -167,13 +167,11 @@ with st.sidebar:
                             "success": False,
                             "waiting_for_reveal": False
                         }
-                        # Osztás
                         for p in state['players']:
                             if state['deck']:
                                 c = state['deck'].pop()
                                 if groq_key: c = fix_card_with_groq(c, groq_key)
                                 state['timelines'][p].append(c)
-                        # Első dal
                         if state['deck']:
                             first = state['deck'].pop()
                             if groq_key: first = fix_card_with_groq(first, groq_key)
@@ -186,30 +184,24 @@ with st.sidebar:
 state = load_state()
 
 # ==========================
-# 📺 TV NÉZET (NEM FRISSÜL MAGÁTÓL!)
+# 📺 TV NÉZET
 # ==========================
 if st.session_state.user_role == "tv":
     st.title("📺 Hitster Party")
 
     if state.get('game_phase') == "LOBBY":
-        st.info("👈 Állítsd be a játékot a bal oldali menüben!")
-        st.markdown("---")
-        st.markdown("### 📱 Telefon csatlakoztatása:")
-        st.markdown("1. Nyisd meg ezt az oldalt a telefonodon.")
-        st.markdown("2. A bal menüben válaszd ki: **📱 Játékos (Telefon)**")
+        st.info("👈 Indítsd el a játékot a bal oldali menüben!")
+        st.write("Csatlakozáshoz nyisd meg ezt az oldalt telefonon, és válaszd a 'Játékos' módot.")
 
     elif state.get('game_phase') == "GUESSING":
         curr_p = state['players'][state['turn_index'] % len(state['players'])]
         song = state['current_mystery_song']
         
-        # 1. ZENE (Iframe nem töltődik újra, mert nincs st.rerun loop)
         st.markdown(f"### 🎶 Most játszik: {song['artist']} - ???")
         st.components.v1.iframe(f"https://open.spotify.com/embed/track/{song['spotify_id']}", height=80)
         
         st.markdown(f"<div class='tv-status'>👉 {curr_p} tippel a telefonján...</div>", unsafe_allow_html=True)
-        st.caption("A zene szól. Ha a játékos végzett, nyomd meg a gombot lent!")
         
-        # 2. IDŐVONAL
         timeline = state['timelines'][curr_p]
         cols = st.columns(len(timeline))
         for i, card in enumerate(timeline):
@@ -222,19 +214,18 @@ if st.session_state.user_role == "tv":
             
         st.divider()
         
-        # 3. KÉZI FRISSÍTÉS (HÁZIGAZDA)
         col1, col2 = st.columns([3, 1])
         with col2:
-            # Ez a gomb olvassa ki a fájlt, amit a telefon írt
+            # GOMB: Erre kell kattintani, ha a játékos végzett a telefonon!
             if st.button("👀 MUTASD AZ EREDMÉNYT!", type="primary", use_container_width=True):
-                state = load_state() # Most olvassuk be a friss állapotot!
+                state = load_state() 
                 if state.get('waiting_for_reveal'):
                     state['game_phase'] = "REVEAL"
                     state['waiting_for_reveal'] = False
                     save_state(state)
                     st.rerun()
                 else:
-                    st.toast("⚠️ A játékos még nem küldte el a tippet!", icon="⏳")
+                    st.warning("⚠️ Még nem tippeltek!")
 
     elif state.get('game_phase') == "REVEAL":
         song = state['current_mystery_song']
@@ -248,7 +239,6 @@ if st.session_state.user_role == "tv":
         curr_p = state['players'][state['turn_index'] % len(state['players'])]
         timeline = state['timelines'][curr_p]
         
-        # Timeline megjelenítése (ha talált, az új kártya kiemelve)
         cols = st.columns(len(timeline))
         for i, card in enumerate(timeline):
             style = "border: 3px solid #ffd700; transform: scale(1.05);" if card == song else ""
@@ -283,19 +273,18 @@ if st.session_state.user_role == "tv":
 elif st.session_state.user_role == "player":
     st.header("📱 Játékos")
     
-    # Névválasztó (egyszerűsítve)
     if 'my_name' not in st.session_state:
         temp_state = load_state()
         players_list = temp_state.get('players', ["Játékos 1", "Játékos 2"])
         selected_player = st.selectbox("Ki vagy te?", players_list)
-        if st.button("Belépés"):
+        if st.button("Belépés", use_container_width=True):
             st.session_state.my_name = selected_player
             st.rerun()
     else:
         me = st.session_state.my_name
         st.info(f"Belépve mint: **{me}**")
         
-        state = load_state() # Telefon mindig frissít gombnyomásra
+        state = load_state() # Mindig frissít gombnyomásra
         
         if state.get('game_phase') == "GUESSING":
             curr_p = state['players'][state['turn_index'] % len(state['players'])]
@@ -305,43 +294,62 @@ elif st.session_state.user_role == "player":
                 
                 timeline = state['timelines'][me]
                 
-                # GOMBOK GENERÁLÁSA
-                for i in range(len(timeline) + 1):
-                    # Kártya előtte
-                    if i > 0:
-                        prev = timeline[i-1]
-                        st.caption(f"{prev['year']} - {prev['title']}")
+                # JAVÍTOTT CIKLUS (Nincs duplikáció!)
+                # 1. Gomb az elejére
+                if st.button("⬇️ IDE ILLESZTEM (Elejére) ⬇️", key="mob_btn_start", use_container_width=True):
+                    # --- Tippelés logika ---
+                    song = state['current_mystery_song']
+                    # 0. helyre rakjuk
+                    next_ok = (len(timeline) == 0) or (timeline[0]['year'] >= song['year'])
+                    state['success'] = next_ok
+                    state['game_msg'] = "TALÁLT!" if state['success'] else "NEM..."
+                    if state['success']: state['timelines'][me].insert(0, song)
+                    state['waiting_for_reveal'] = True
+                    save_state(state)
+                    st.rerun()
+
+                # 2. Kártyák és a utánuk lévő gombok
+                for i, card in enumerate(timeline):
+                    # Kártya megjelenítése
+                    st.markdown(f"""
+                    <div class='mob-card-box'>
+                        <div style='font-size:1.5em; font-weight:bold'>{card['year']}</div>
+                        <div>{card['title']}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
                     
-                    # A Lényeg: A gomb
-                    if st.button(f"⬇️ IDE ILLESZTEM ⬇️", key=f"mob_{i}", use_container_width=True):
+                    # Gomb a kártya után
+                    if st.button(f"⬇️ IDE ILLESZTEM ⬇️", key=f"mob_btn_{i+1}", use_container_width=True):
+                        # --- Tippelés logika ---
                         song = state['current_mystery_song']
-                        # Ellenőrzés
-                        prev_ok = (i==0) or (timeline[i-1]['year'] <= song['year'])
-                        next_ok = (i==len(timeline)) or (timeline[i]['year'] >= song['year'])
+                        pos = i + 1
+                        prev_ok = (timeline[pos-1]['year'] <= song['year'])
+                        # Ha ez az utolsó hely, akkor a következő mindig OK
+                        next_ok = (pos == len(timeline)) or (timeline[pos]['year'] >= song['year'])
                         
                         state['success'] = (prev_ok and next_ok)
-                        if state['success']:
-                            state['timelines'][me].insert(i, song)
-                        
-                        state['waiting_for_reveal'] = True # Jelezzük a TV-nek!
+                        state['game_msg'] = "TALÁLT!" if state['success'] else "NEM..."
+                        if state['success']: state['timelines'][me].insert(pos, song)
+                        state['waiting_for_reveal'] = True
                         save_state(state)
-                        st.success("Elküldve! Nézd a TV-t!")
-                        time.sleep(1) # Kis pihi
                         st.rerun()
-                    
-                    # Kártya utána
-                    if i < len(timeline):
-                        nxt = timeline[i]
-                        st.caption(f"{nxt['year']} - {nxt['title']}")
 
             else:
                 st.warning(f"Most {curr_p} gondolkodik...")
-                if st.button("🔄 Frissítés (Ha én jövök)"): st.rerun()
+                if st.button("🔄 Frissítés", use_container_width=True): st.rerun()
                 
         elif state.get('game_phase') == "REVEAL":
-            st.info("Eredményhirdetés a TV-n...")
-            if st.button("🔄 Frissítés"): st.rerun()
+            # MOST MÁR A TELEFONON IS LÁTSZIK AZ EREDMÉNY!
+            song = state['current_mystery_song']
+            color = "green" if state['success'] else "red"
+            msg = "TALÁLT! 🎉" if state['success'] else "NEM TALÁLT... 😢"
+            
+            st.markdown(f"<h2 style='text-align:center; color:{color};'>{msg}</h2>", unsafe_allow_html=True)
+            st.markdown(f"<div class='mob-card-box' style='border-color:{color}'>HELYES ÉV: <b>{song['year']}</b><br>{song['title']}</div>", unsafe_allow_html=True)
+            
+            st.info("Nézd a TV-t a részletekért!")
+            if st.button("🔄 Frissítés", use_container_width=True): st.rerun()
         
         else:
-            st.write("Várakozás a játék indítására...")
-            if st.button("🔄 Frissítés"): st.rerun()
+            st.write("Várakozás a játékra...")
+            if st.button("🔄 Frissítés", use_container_width=True): st.rerun()
